@@ -29,6 +29,7 @@ const state = {
   dmNames: {}, // channelId -> name learned from a live sender (fallback)
   users: {}, // user_id -> user object { id, username, first_name, last_name, nickname }
   usersByName: {}, // username -> same user object (for resolving group members)
+  teams: {}, // team_id -> team display name
   activity: {}, // channelId -> last-activity ms (learned live; complements last_post_at)
   userLookupEnabled: true, // flips off if get_users_by_ids isn't in the backend yet
   collapsed: {}, // section title -> true when folded
@@ -137,6 +138,14 @@ async function init() {
     console.error("connect_websocket failed", e);
   }
 
+  // team names (so we can label which team a channel belongs to)
+  try {
+    const teams = await invoke("fetch_teams");
+    for (const t of teams || []) state.teams[t.id] = t.display_name || t.name;
+  } catch (e) {
+    console.error("fetch_teams failed", e);
+  }
+
   // channels (slow: hits every team once)
   try {
     state.channels = await invoke("fetch_all_channels");
@@ -243,6 +252,17 @@ function typeLabel(ch) {
   return { D: "Direct message", G: "Group", O: "Public channel", P: "Private channel" }[ch.type] || "Channel";
 }
 
+// The team a channel belongs to (only public/private channels have one).
+function teamName(ch) {
+  return ch.team_id ? state.teams[ch.team_id] || null : null;
+}
+
+// Sub-line under a channel: "Team · Public channel", or just the type.
+function subLabel(ch) {
+  const t = teamName(ch);
+  return t ? `${t} · ${typeLabel(ch)}` : typeLabel(ch);
+}
+
 // last_post_at (backend, once you add it) OR live-learned activity OR 0.
 function activityOf(ch) {
   const server = typeof ch.last_post_at === "number" ? ch.last_post_at : 0;
@@ -328,7 +348,7 @@ function channelItemEl(ch) {
   nm.textContent = name;
   const sub = document.createElement("div");
   sub.className = "item-sub";
-  sub.textContent = typeLabel(ch);
+  sub.textContent = subLabel(ch);
   main.appendChild(nm);
   main.appendChild(sub);
   row.appendChild(main);
@@ -353,7 +373,7 @@ async function openChannel(id) {
   emptyState.classList.add("hidden");
   chatPanel.classList.remove("hidden");
   chatTitle.textContent = displayName(ch);
-  chatSub.textContent = typeLabel(ch);
+  chatSub.textContent = subLabel(ch);
   messagesEl.innerHTML = '<div class="loading">Loading messages…</div>';
 
   // reset paging for the newly opened conversation

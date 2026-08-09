@@ -41,6 +41,7 @@ struct Channel {
     channel_type: String,
     display_name: String,
     name: String,
+    team_id: String,
     last_post_at: i64,
 }
 
