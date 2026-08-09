@@ -553,6 +553,20 @@ function formatTime(ts) {
 }
 
 // ================= LIVE EVENTS =================
+// Desktop notification via the Tauri notification plugin. No-op (and silent)
+// until the plugin is registered on the Rust side, so it never errors early.
+async function notify(title, body) {
+  try {
+    const n = window.__TAURI__ && window.__TAURI__.notification;
+    if (!n) return;
+    let granted = await n.isPermissionGranted();
+    if (!granted) granted = (await n.requestPermission()) === "granted";
+    if (granted) n.sendNotification({ title, body: body || "" });
+  } catch (_) {
+    /* plugin missing or permission denied — ignore */
+  }
+}
+
 function onIncoming(event) {
   const p = event.payload; // { channel_id, sender, message }
   if (!p) return;
@@ -569,6 +583,15 @@ function onIncoming(event) {
   if (ch && ch.type === "D" && p.sender && !mine && !state.dmNames[ch.id]) {
     state.dmNames[ch.id] = p.sender;
     if (p.channel_id === state.activeId) chatTitle.textContent = displayName(ch);
+  }
+
+  // Notify for others' messages we'd otherwise miss: window unfocused, or the
+  // message is in a conversation that isn't the one currently open.
+  if (!mine && (!document.hasFocus() || p.channel_id !== state.activeId)) {
+    const su = state.usersByName[senderClean];
+    const who = (su && realName(su)) || p.sender || "New message";
+    const title = ch && !isDM(ch) ? `${who} · ${displayName(ch)}` : who;
+    notify(title, p.message);
   }
 
   if (p.channel_id === state.activeId) {
