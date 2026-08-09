@@ -626,3 +626,203 @@ function autoResize() {
   composerInput.style.height = "auto";
   composerInput.style.height = Math.min(composerInput.scrollHeight, 140) + "px";
 }
+
+// ================= NEW CONVERSATION MODAL =================
+const newBtn = $("new-btn");
+const modalOverlay = $("modal-overlay");
+const modalClose = $("modal-close");
+const segChat = $("seg-chat");
+const segChannel = $("seg-channel");
+const modeChat = $("mode-chat");
+const modeChannel = $("mode-channel");
+const chatChips = $("chat-chips");
+const peopleSearch = $("people-search");
+const peopleResults = $("people-results");
+const chatError = $("chat-error");
+const chatCreate = $("chat-create");
+const channelTeam = $("channel-team");
+const channelName = $("channel-name");
+const channelError = $("channel-error");
+const channelCreate = $("channel-create");
+
+const picked = new Map(); // user_id -> user object (people chosen for a new chat)
+let lastResults = []; // most recent search results (to re-render on pick)
+let searchTimer = null;
+
+newBtn.addEventListener("click", openModal);
+modalClose.addEventListener("click", closeModal);
+modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
+segChat.addEventListener("click", () => switchMode("chat"));
+segChannel.addEventListener("click", () => switchMode("channel"));
+
+function openModal() {
+  picked.clear();
+  lastResults = [];
+  peopleSearch.value = "";
+  peopleResults.innerHTML = "";
+  chatError.textContent = "";
+  channelError.textContent = "";
+  channelName.value = "";
+  renderChips();
+  updateChatCreate();
+  populateTeams();
+  switchMode("chat");
+  modalOverlay.classList.remove("hidden");
+  peopleSearch.focus();
+}
+
+function closeModal() {
+  modalOverlay.classList.add("hidden");
+}
+
+function switchMode(mode) {
+  const chat = mode === "chat";
+  segChat.classList.toggle("active", chat);
+  segChannel.classList.toggle("active", !chat);
+  modeChat.classList.toggle("hidden", !chat);
+  modeChannel.classList.toggle("hidden", chat);
+}
+
+// ---- chat mode: people picker ----
+peopleSearch.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  const term = peopleSearch.value.trim();
+  if (term.length < 2) { peopleResults.innerHTML = ""; lastResults = []; return; }
+  searchTimer = setTimeout(() => doSearch(term), 220);
+});
+
+async function doSearch(term) {
+  try {
+    const users = await invoke("search_users", { term });
+    lastResults = (users || []).filter((u) => u && u.id && u.id !== state.me?.id);
+    for (const u of lastResults) rememberUser(u);
+    renderPeople();
+    chatError.textContent = "";
+  } catch (_) {
+    peopleResults.innerHTML = "";
+    chatError.textContent = "Backend: manca il comando search_users.";
+  }
+}
+
+function renderPeople() {
+  peopleResults.innerHTML = "";
+  for (const u of lastResults) {
+    const row = document.createElement("div");
+    row.className = "person-row" + (picked.has(u.id) ? " picked" : "");
+    const av = document.createElement("div");
+    av.className = "person-avatar";
+    decorateAvatar(av, u.id, u.username);
+    const main = document.createElement("div");
+    main.className = "person-main";
+    const nm = document.createElement("div");
+    nm.className = "person-name";
+    nm.textContent = realName(u);
+    const sub = document.createElement("div");
+    sub.className = "person-sub";
+    sub.textContent = "@" + (u.username || "");
+    main.appendChild(nm); main.appendChild(sub);
+    row.appendChild(av); row.appendChild(main);
+    row.addEventListener("click", () => togglePick(u));
+    peopleResults.appendChild(row);
+  }
+}
+
+function togglePick(u) {
+  if (picked.has(u.id)) picked.delete(u.id);
+  else picked.set(u.id, u);
+  renderChips();
+  renderPeople();
+  updateChatCreate();
+}
+
+function renderChips() {
+  chatChips.innerHTML = "";
+  for (const [id, u] of picked) {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    const label = document.createElement("span");
+    label.textContent = realName(u);
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "✕";
+    x.addEventListener("click", () => { picked.delete(id); renderChips(); renderPeople(); updateChatCreate(); });
+    chip.appendChild(label); chip.appendChild(x);
+    chatChips.appendChild(chip);
+  }
+}
+
+function updateChatCreate() {
+  chatCreate.disabled = picked.size < 1;
+  chatCreate.textContent = picked.size >= 2 ? "Start group" : "Start chat";
+}
+
+chatCreate.addEventListener("click", async () => {
+  if (picked.size < 1 || !state.me?.id) return;
+  const ids = [...new Set([state.me.id, ...picked.keys()])]; // include me
+  chatCreate.disabled = true;
+  chatError.textContent = "";
+  try {
+    const ch = await invoke("create_chat", { userIds: ids });
+    onChannelCreated(ch);
+  } catch (e) {
+    chatError.textContent = "Impossibile creare la chat: " + e;
+    chatCreate.disabled = false;
+  }
+});
+
+// ---- channel mode: named channel ----
+function populateTeams() {
+  channelTeam.innerHTML = "";
+  const entries = Object.entries(state.teams);
+  if (entries.length === 0) {
+    const opt = document.createElement("option");
+    opt.textContent = "No teams available";
+    opt.value = "";
+    channelTeam.appendChild(opt);
+  }
+  for (const [id, name] of entries) {
+    const opt = document.createElement("option");
+    opt.value = id; opt.textContent = name;
+    channelTeam.appendChild(opt);
+  }
+  updateChannelCreate();
+}
+
+channelName.addEventListener("input", updateChannelCreate);
+channelTeam.addEventListener("change", updateChannelCreate);
+
+function updateChannelCreate() {
+  channelCreate.disabled = !channelTeam.value || !channelName.value.trim();
+}
+
+function slugify(s) {
+  return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
+}
+
+channelCreate.addEventListener("click", async () => {
+  const teamId = channelTeam.value;
+  const display = channelName.value.trim();
+  if (!teamId || !display) return;
+  const type = document.querySelector('input[name="ch-type"]:checked')?.value || "O";
+  const slug = slugify(display) || "channel";
+  channelCreate.disabled = true;
+  channelError.textContent = "";
+  try {
+    const ch = await invoke("create_named_channel", {
+      teamId, name: slug, displayName: display, channelType: type,
+    });
+    onChannelCreated(ch);
+  } catch (e) {
+    channelError.textContent = "Impossibile creare il canale: " + e;
+    channelCreate.disabled = false;
+  }
+});
+
+// Shared: a channel was just created → add it, open it, close the modal.
+function onChannelCreated(ch) {
+  if (!ch || !ch.id) { chatError.textContent = "Risposta inattesa dal backend."; return; }
+  if (!state.channels.find((c) => c.id === ch.id)) state.channels.push(ch);
+  closeModal();
+  renderSidebar();
+  openChannel(ch.id);
+}

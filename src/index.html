@@ -35,6 +35,7 @@
         <header class="sidebar-header">
           <div class="me-avatar" id="me-avatar">?</div>
           <div class="me-name" id="me-name">…</div>
+          <button id="new-btn" class="new-btn" title="New conversation">＋</button>
         </header>
         <div class="search-wrap">
           <input id="search-input" type="text" placeholder="Search conversations…" autocomplete="off" />
@@ -69,6 +70,43 @@
           </form>
         </div>
       </main>
+    </div>
+
+    <!-- ===================== NEW CONVERSATION MODAL ===================== -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="seg">
+            <button id="seg-chat" class="seg-btn active" type="button">Chat</button>
+            <button id="seg-channel" class="seg-btn" type="button">Channel</button>
+          </div>
+          <button id="modal-close" class="modal-close" type="button" title="Close">✕</button>
+        </div>
+
+        <!-- CHAT MODE: pick people -->
+        <div id="mode-chat" class="modal-body">
+          <div id="chat-chips" class="chips"></div>
+          <input id="people-search" class="modal-input" placeholder="Search people…" autocomplete="off" spellcheck="false" />
+          <div id="people-results" class="people-results"></div>
+          <p class="modal-hint">1 person → direct message · 2 or more → group.</p>
+          <p id="chat-error" class="modal-error"></p>
+          <button id="chat-create" class="modal-primary" type="button" disabled>Start chat</button>
+        </div>
+
+        <!-- CHANNEL MODE: named channel in a team -->
+        <div id="mode-channel" class="modal-body hidden">
+          <label class="modal-label">Team</label>
+          <select id="channel-team" class="modal-input"></select>
+          <label class="modal-label">Channel name</label>
+          <input id="channel-name" class="modal-input" placeholder="e.g. project-updates" autocomplete="off" spellcheck="false" />
+          <div class="radio-row">
+            <label><input type="radio" name="ch-type" value="O" checked /> Public</label>
+            <label><input type="radio" name="ch-type" value="P" /> Private</label>
+          </div>
+          <p id="channel-error" class="modal-error"></p>
+          <button id="channel-create" class="modal-primary" type="button" disabled>Create channel</button>
+        </div>
+      </div>
     </div>
   </body>
 </html>

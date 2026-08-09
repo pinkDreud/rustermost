@@ -454,6 +454,82 @@ async fn get_users_by_ids(
     Ok(users)
 }
 
+
+#[tauri::command]
+async fn search_users(
+    term: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<MMUser>, AppError> {
+    let session = state.current_session()?;
+    let url = format!("{}/api/v4/users/search", session.base_url);
+
+    let body = serde_json::json!({ "term": term });
+
+    let resp = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(&session.token)
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let users = resp.json::<Vec<MMUser>>().await?;
+    Ok(users)
+}
+
+#[tauri::command]
+async fn create_chat(
+    user_ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Channel, AppError> {
+    let session = state.current_session()?;
+
+    // 2 id → direct message; 3+ → group message.
+    let endpoint = if user_ids.len() <= 2 { "direct" } else { "group" };
+    let url = format!("{}/api/v4/channels/{}", session.base_url, endpoint);
+
+    let resp = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(&session.token)
+        .json(&user_ids)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let channel = resp.json::<Channel>().await?;
+    Ok(channel)
+}
+
+#[tauri::command]
+async fn create_named_channel(
+    team_id: String,
+    name: String,
+    display_name: String,
+    channel_type: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Channel, AppError> {
+    let session = state.current_session()?;
+    let url = format!("{}/api/v4/channels", session.base_url);
+
+    let body = serde_json::json!({
+        "team_id": team_id,
+        "name": name,
+        "display_name": display_name,
+        "type": channel_type,
+    });
+
+    let resp = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(&session.token)
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let channel = resp.json::<Channel>().await?;
+    Ok(channel)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -468,7 +544,7 @@ pub fn run() {
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
             fetch_all_channels, get_cached_channels,
-            connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar])
+            connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar, search_users, create_chat, create_named_channel])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

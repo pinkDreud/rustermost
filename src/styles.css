@@ -137,7 +137,18 @@ button {
   background-position: center;
   text-transform: uppercase;
 }
-.me-name { font-weight: 600; }
+.me-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.new-btn {
+  flex: 0 0 auto;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  color: var(--text);
+  font-size: 20px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.new-btn:hover { background: var(--accent); color: #fff; }
 .search-wrap { padding: 12px; }
 .search-wrap input { width: 100%; }
 
@@ -286,3 +297,89 @@ button {
 }
 .composer button:hover { filter: brightness(1.1); }
 .composer button:active { transform: scale(0.94); }
+
+/* ---------- new-conversation modal ---------- */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 50;
+}
+.modal {
+  width: 420px; max-width: 92vw;
+  max-height: 82vh;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.seg { display: flex; gap: 4px; background: var(--bg-3); border-radius: 10px; padding: 3px; }
+.seg-btn {
+  background: transparent; color: var(--text-dim);
+  padding: 6px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+}
+.seg-btn.active { background: var(--accent); color: #fff; }
+.modal-close { background: transparent; color: var(--text-dim); font-size: 16px; }
+.modal-close:hover { color: var(--text); }
+
+.modal-body { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.modal-label { font-size: 12px; color: var(--text-faint); font-weight: 600; margin-top: 2px; }
+.modal-input {
+  width: 100%;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px; font-family: inherit;
+  outline: none;
+}
+.modal-input:focus { border-color: var(--accent); }
+select.modal-input { appearance: none; cursor: pointer; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--accent-dim); color: #eaf2ff;
+  border-radius: 20px; padding: 4px 6px 4px 10px; font-size: 13px;
+}
+.chip button { background: transparent; color: #cdd9ee; font-size: 13px; line-height: 1; padding: 0 2px; }
+.chip button:hover { color: #fff; }
+
+.people-results { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
+.person-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 6px; border-radius: 8px; cursor: pointer;
+}
+.person-row:hover { background: var(--bg-2); }
+.person-row.picked { opacity: 0.5; }
+.person-avatar {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%;
+  background: #313846; background-size: cover; background-position: center;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase;
+}
+.person-main { min-width: 0; }
+.person-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.person-sub { font-size: 12px; color: var(--text-faint); }
+
+.radio-row { display: flex; gap: 18px; font-size: 14px; color: var(--text-dim); }
+.radio-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.radio-row input { accent-color: var(--accent); }
+
+.modal-hint { font-size: 12px; color: var(--text-faint); margin: 0; }
+.modal-error { font-size: 13px; color: var(--danger); margin: 0; min-height: 0; }
+.modal-primary {
+  background: var(--accent); color: #fff;
+  border-radius: 10px; padding: 11px; font-size: 15px; font-weight: 600;
+  transition: filter 0.15s;
+}
+.modal-primary:hover:not(:disabled) { filter: brightness(1.08); }
+.modal-primary:disabled { opacity: 0.5; cursor: default; }
