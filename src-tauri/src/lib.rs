@@ -49,7 +49,21 @@ struct ChannelGroups {
     community: Vec<Channel>
 }
 
-// 1. Come si stampa (serve per il messaggio leggibile)
+
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+struct Post {
+    id: String,
+    message: String,
+    user_id: String,
+    create_at: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct PostList {
+    order: Vec<String>,
+    posts: std::collections::HashMap<String, Post>,
+}
+
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -343,14 +357,41 @@ async fn send_message(
     });
 
      reqwest::Client::new()
-        .post(&url)                    // ← POST, non GET
+        .post(&url)
         .bearer_auth(&session.token)
-        .json(&body)                   // ← allega il body JSON
+        .json(&body)
         .send()
         .await?
-        .error_for_status()?;          // ← 4xx/5xx diventano errore
+        .error_for_status()?;
 
     Ok(())
+}
+
+#[tauri::command]
+async fn get_posts(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<Post>, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/channels/{}/posts?per_page=100", session.base_url, channel_id);
+
+    let resp = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(&session.token)
+        .send()
+        .await?;
+
+    let list = resp.json::<PostList>().await?;
+
+    // 'order' è dal più recente al più vecchio; per la UI vogliamo il contrario
+    let posts = list.order
+        .iter()
+        .rev()                                          // inverti: dal vecchio al nuovo
+        .filter_map(|id| list.posts.get(id).cloned())   // id → Post (salta i mancanti)
+        .collect();
+
+    Ok(posts)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -367,7 +408,7 @@ pub fn run() {
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
             fetch_all_channels, get_cached_channels,
-            connect_websocket, send_message])
+            connect_websocket, send_message, get_posts])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
