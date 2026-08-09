@@ -1,8 +1,8 @@
 [package]
 name = "rustermost"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "A mattermost client with tauri"
+authors = ["Matteo Magherini"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -27,6 +27,7 @@ tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 base64 = "0.23.1"
+tauri-plugin-notification = "2"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
