@@ -133,6 +133,8 @@ button {
   font-weight: 700;
   color: white;
   background: linear-gradient(135deg, var(--accent), #7b5cff);
+  background-size: cover;
+  background-position: center;
   text-transform: uppercase;
 }
 .me-name { font-weight: 600; }
@@ -224,9 +226,26 @@ button {
 .loading, .error { color: var(--text-dim); text-align: center; margin: auto; }
 .error { color: var(--danger); }
 
-.msg { max-width: 68%; display: flex; flex-direction: column; }
-.msg-other { align-self: flex-start; }
-.msg-me { align-self: flex-end; align-items: flex-end; }
+.msg-row { display: flex; align-items: flex-end; gap: 8px; max-width: 80%; }
+.msg-row:not(.mine) { align-self: flex-start; }
+.msg-row.mine { align-self: flex-end; flex-direction: row-reverse; }
+
+.msg-avatar {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  background-color: #313846;
+  background-size: cover;
+  background-position: center;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: white;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+.msg-avatar.has-img { background-color: transparent; }
+
+.msg { min-width: 0; display: flex; flex-direction: column; }
+.msg-me { align-items: flex-end; }
 .msg-meta { font-size: 11px; color: var(--text-faint); margin: 0 4px 3px; }
 .msg-body {
   padding: 9px 13px;

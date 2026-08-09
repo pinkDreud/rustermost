@@ -32,7 +32,15 @@ const state = {
   activity: {}, // channelId -> last-activity ms (learned live; complements last_post_at)
   userLookupEnabled: true, // flips off if get_users_by_ids isn't in the backend yet
   collapsed: {}, // section title -> true when folded
+  avatars: {}, // user_id -> data URL (in-memory; the disk cache comes later)
+  avatarPending: new Set(), // user_ids currently being fetched
+  avatarLookupEnabled: true, // flips off if get_avatar isn't in the backend yet
+  pageOldest: null, // id of the oldest post currently shown (paging cursor)
+  pageMore: false, // might there be older posts to load?
+  pageLoading: false, // a page load is in flight
 };
+
+const PAGE_SIZE = 100; // matches the backend's per_page
 
 // ---------- element refs ----------
 const $ = (id) => document.getElementById(id);
@@ -144,7 +152,7 @@ async function init() {
 function renderMe() {
   const name = state.me?.username || "me";
   meName.textContent = "@" + name;
-  meAvatar.textContent = name.charAt(0) || "?";
+  decorateAvatar(meAvatar, state.me?.id, name);
 }
 
 // ================= USER RESOLUTION =================
@@ -306,7 +314,11 @@ function channelItemEl(ch) {
 
   const av = document.createElement("div");
   av.className = "item-avatar" + (dm ? " dm" : "");
-  av.textContent = (name.replace(/^@/, "").charAt(0) || "#");
+  if (ch.type === "D") {
+    decorateAvatar(av, partnerId(ch), name); // 1:1 → the other person's photo
+  } else {
+    av.textContent = name.replace(/^@/, "").charAt(0) || "#"; // group/channel → initial
+  }
   row.appendChild(av);
 
   const main = document.createElement("div");
@@ -344,10 +356,17 @@ async function openChannel(id) {
   chatSub.textContent = typeLabel(ch);
   messagesEl.innerHTML = '<div class="loading">Loading messages…</div>';
 
+  // reset paging for the newly opened conversation
+  state.pageLoading = false;
+  state.pageOldest = null;
+  state.pageMore = false;
+
   try {
     const posts = await invoke("get_posts", { channelId: id });
     if (state.activeId !== id) return; // user switched away while loading
     renderMessages(posts);
+    state.pageOldest = posts.length ? posts[0].id : null; // posts are oldest→newest
+    state.pageMore = posts.length >= PAGE_SIZE; // a full page hints there's more
     // Resolve any unknown authors, then relabel (no-op until get_users_by_ids exists).
     const authorIds = posts.map((p) => p.user_id);
     resolveUsers(authorIds).then(() => {
@@ -356,6 +375,53 @@ async function openChannel(id) {
   } catch (e) {
     console.error("get_posts failed", e);
     messagesEl.innerHTML = '<div class="error">Failed to load messages.</div>';
+  }
+}
+
+// Load the page of messages that comes BEFORE the oldest one on screen, and
+// prepend it without moving the viewport. Triggered by scrolling near the top.
+async function loadOlder() {
+  if (state.pageLoading || !state.pageMore || !state.activeId || !state.pageOldest) return;
+  state.pageLoading = true;
+  const channelId = state.activeId;
+  const before = state.pageOldest;
+
+  const spinner = document.createElement("div");
+  spinner.className = "loading top-loading";
+  spinner.textContent = "Loading older messages…";
+  messagesEl.insertBefore(spinner, messagesEl.firstChild);
+
+  try {
+    const older = await invoke("get_posts", { channelId, before });
+    if (state.activeId !== channelId) return;
+    spinner.remove();
+
+    if (!older || older.length === 0) { state.pageMore = false; return; }
+    // Guard: if the backend doesn't understand `before` yet, it returns the same
+    // latest page — the oldest id won't have moved. Stop instead of duplicating.
+    if (older[0].id === before) { state.pageMore = false; return; }
+
+    await resolveUsers(older.map((p) => p.user_id));
+    if (state.activeId !== channelId) return;
+
+    const prevH = messagesEl.scrollHeight;
+    const frag = document.createDocumentFragment();
+    for (const p of older) {
+      const mine = state.me && p.user_id === state.me.id;
+      const sender = mine ? null : realName(state.users[p.user_id]);
+      frag.appendChild(bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at }));
+    }
+    messagesEl.insertBefore(frag, messagesEl.firstChild);
+    messagesEl.scrollTop += messagesEl.scrollHeight - prevH; // keep the view steady
+
+    state.pageOldest = older[0].id;
+    state.pageMore = older.length >= PAGE_SIZE;
+  } catch (e) {
+    console.error("get_posts (before) failed", e);
+    spinner.remove();
+    state.pageMore = false; // stop trying (e.g. backend not updated yet)
+  } finally {
+    state.pageLoading = false;
   }
 }
 
@@ -372,13 +438,69 @@ function renderMessages(posts) {
     const mine = state.me && p.user_id === state.me.id;
     const sender = mine ? null : realName(state.users[p.user_id]); // named once resolvable
     messagesEl.appendChild(
-      bubbleEl({ mine, sender, text: p.message, ts: p.create_at })
+      bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at })
     );
   }
   scrollToBottom();
 }
 
-function bubbleEl({ mine, sender, text, ts }) {
+// A round avatar for a user. Starts as a colored initial, then swaps to the
+// real image once get_avatar resolves. Every avatar for the same user carries
+// a data-uid so we can fill them all in when the image arrives.
+function paintAvatar(el, dataUrl) {
+  el.style.backgroundImage = `url("${dataUrl}")`;
+  el.style.backgroundColor = "transparent";
+  // Inline so it wins over any `background:` shorthand on the element (the
+  // sidebar avatar has one, which would otherwise reset the sizing to auto).
+  el.style.backgroundSize = "cover";
+  el.style.backgroundPosition = "center";
+  el.style.backgroundRepeat = "no-repeat";
+  el.textContent = "";
+}
+
+// Turn any circular element into an avatar for `uid`: real image if we have it,
+// otherwise the initial + a background fetch. Works for message, sidebar and
+// header avatars alike — they all carry data-uid so a late-arriving image fills
+// every copy at once.
+function decorateAvatar(el, uid, fallbackName) {
+  if (uid) el.dataset.uid = uid;
+  const cached = uid && state.avatars[uid];
+  if (cached) {
+    paintAvatar(el, cached);
+  } else {
+    el.textContent = (fallbackName || "?").replace(/^@/, "").charAt(0).toUpperCase() || "?";
+    if (uid) ensureAvatar(uid);
+  }
+}
+
+function avatarEl(uid, name) {
+  const el = document.createElement("div");
+  el.className = "msg-avatar";
+  decorateAvatar(el, uid, name);
+  return el;
+}
+
+async function ensureAvatar(uid) {
+  if (!uid || state.avatars[uid] || state.avatarPending.has(uid) || !state.avatarLookupEnabled) return;
+  state.avatarPending.add(uid);
+  try {
+    const dataUrl = await invoke("get_avatar", { userId: uid });
+    if (dataUrl) {
+      state.avatars[uid] = dataUrl;
+      for (const el of document.querySelectorAll(`[data-uid="${uid}"]`)) paintAvatar(el, dataUrl);
+    }
+  } catch (_) {
+    state.avatarLookupEnabled = false; // command not registered yet
+  } finally {
+    state.avatarPending.delete(uid);
+  }
+}
+
+function bubbleEl({ mine, uid, sender, text, ts }) {
+  const row = document.createElement("div");
+  row.className = "msg-row" + (mine ? " mine" : "");
+  row.appendChild(avatarEl(uid, mine ? state.me?.username : sender));
+
   const el = document.createElement("div");
   el.className = "msg " + (mine ? "msg-me" : "msg-other");
 
@@ -392,7 +514,9 @@ function bubbleEl({ mine, sender, text, ts }) {
   body.className = "msg-body";
   body.textContent = text; // textContent — never inject message HTML
   el.appendChild(body);
-  return el;
+
+  row.appendChild(el);
+  return row;
 }
 
 function scrollToBottom() {
@@ -430,8 +554,10 @@ function onIncoming(event) {
   if (p.channel_id === state.activeId) {
     // drop the "No messages yet." placeholder if present
     if (messagesEl.querySelector(".loading")) messagesEl.innerHTML = "";
+    // live events carry the username but not the user_id — resolve it if we can
+    const uid = mine ? state.me?.id : state.usersByName[senderClean]?.id;
     messagesEl.appendChild(
-      bubbleEl({ mine, sender: mine ? null : p.sender, text: p.message, ts: Date.now() })
+      bubbleEl({ mine, uid, sender: mine ? null : p.sender, text: p.message, ts: Date.now() })
     );
     scrollToBottom();
   } else {
@@ -453,6 +579,11 @@ composerInput.addEventListener("keydown", (e) => {
   }
 });
 composerInput.addEventListener("input", autoResize);
+
+// Scroll near the top of the message pane → pull in older history.
+messagesEl.addEventListener("scroll", () => {
+  if (messagesEl.scrollTop < 80) loadOlder();
+});
 
 async function sendCurrent() {
   const text = composerInput.value.trim();

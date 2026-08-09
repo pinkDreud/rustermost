@@ -380,12 +380,17 @@ async fn send_message(
 #[tauri::command]
 async fn get_posts(
     channel_id: String,
+    before: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<Post>, AppError> {
     let session = state.current_session()?;
 
-    let url = format!("{}/api/v4/channels/{}/posts?per_page=100", session.base_url, channel_id);
-
+    let mut url = format!("{}/api/v4/channels/{}/posts?per_page=100", session.base_url, channel_id);
+    
+    if let Some(id) = before {
+        url = format!("{}&before={}", url, id);
+    }
+    
     let resp = reqwest::Client::new()
         .get(url)
         .bearer_auth(&session.token)
@@ -403,6 +408,29 @@ async fn get_posts(
 
     Ok(posts)
 }
+
+#[tauri::command]
+async fn get_avatar(
+    user_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/users/{}/image", session.base_url, user_id);
+
+    let resp = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(&session.token)
+        .send()
+        .await?;
+
+      let bytes = resp.bytes().await?;
+
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:image/png;base64,{}", b64))
+}
+
 
 
 #[tauri::command]
@@ -439,7 +467,7 @@ pub fn run() {
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
             fetch_all_channels, get_cached_channels,
-            connect_websocket, send_message, get_posts, get_users_by_ids])
+            connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
