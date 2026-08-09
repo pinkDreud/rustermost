@@ -60,6 +60,13 @@ impl std::fmt::Display for AppError {
     }
 }
 
+#[derive(serde::Serialize, Clone)]
+struct IncomingMessage {
+    channel_id: String,
+    sender: String,
+    message: String,
+}
+
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
         AppError::Network(e.to_string())
@@ -262,8 +269,12 @@ fn get_cached_channels(state: tauri::State<'_, AppState>,) -> Vec<Channel> {
 }
 
 #[tauri::command]
-async fn connect_websocket(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+async fn connect_websocket(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
     use futures_util::{SinkExt, StreamExt};
+    use tauri::Emitter;   
 
     let session = state.current_session()?;
 
@@ -288,7 +299,24 @@ async fn connect_websocket(state: tauri::State<'_, AppState>) -> Result<(), AppE
 
         while let Some(msg) = read.next().await {
             match msg {
-                Ok(m) => println!("WS >> {}", m),
+                Ok(m) => {
+                    let text = m.to_string();
+
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if json["event"] == "posted" {
+                            if let Some(post_str) = json["data"]["post"].as_str() {
+                                if let Ok(post) = serde_json::from_str::<serde_json::Value>(post_str) {
+                                    let msg = IncomingMessage {
+                                        channel_id: post["channel_id"].as_str().unwrap_or("").to_string(),
+                                        sender:     json["data"]["sender_name"].as_str().unwrap_or("").to_string(),
+                                        message:    post["message"].as_str().unwrap_or("").to_string(),
+                                    };
+                                    let _ = app.emit("mm-post", msg);
+                                }
+                            }
+                        }
+                    }
+                }
                 Err(e) => { eprintln!("WS read error: {}", e); break; }
             }
         }
@@ -296,6 +324,33 @@ async fn connect_websocket(state: tauri::State<'_, AppState>) -> Result<(), AppE
     });
 
     Ok(()) 
+}
+
+
+#[tauri::command]
+async fn send_message(
+    channel_id: String,
+    message: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/posts", session.base_url);
+
+    let body = serde_json::json!({
+            "channel_id": channel_id,
+            "message": message,
+    });
+
+     reqwest::Client::new()
+        .post(&url)                    // ← POST, non GET
+        .bearer_auth(&session.token)
+        .json(&body)                   // ← allega il body JSON
+        .send()
+        .await?
+        .error_for_status()?;          // ← 4xx/5xx diventano errore
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -312,7 +367,7 @@ pub fn run() {
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
             fetch_all_channels, get_cached_channels,
-            connect_websocket])
+            connect_websocket, send_message])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
