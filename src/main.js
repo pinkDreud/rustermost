@@ -15,9 +15,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 
       const timer = setInterval(async () => {
         try {
-          const token = await invoke("capture_token", { url });
+          const token = await invoke("capture_session", { baseUrl : url });
           clearInterval(timer);
-          out.textContent = "Token catturato! " + token.slice(0, 8) + "...";
+          out.textContent = "Token catturato!";
         } catch (_) { /* token non ancora presente: riprovo al giro dopo */ }
       }, 2000);
     } catch (err) {
