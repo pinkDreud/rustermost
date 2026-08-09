@@ -255,6 +255,12 @@ async fn fetch_all_channels(
     Ok(all)
 }
 
+#[tauri::command]
+fn get_cached_channels(state: tauri::State<'_, AppState>,) -> Vec<Channel> {
+    let guard = state.channels.lock().unwrap();
+    guard.clone()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -268,7 +274,7 @@ pub fn run() {
             capture_session,
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
-            fetch_all_channels])
+            fetch_all_channels, get_cached_channels])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
