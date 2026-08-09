@@ -534,6 +534,7 @@ async fn create_named_channel(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init()
         .manage(AppState {
             session: Mutex::new(None),
             channels: Mutex::new(Vec::new()),   // parte vuota
