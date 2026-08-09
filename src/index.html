@@ -2,21 +2,71 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <link rel="stylesheet" href="styles.css" />
+    <title>rustermost</title>
     <script type="module" src="/main.js" defer></script>
   </head>
-
   <body>
-    <main class="container">
-      <p id="status">Verifico il backend...</p>
+    <!-- ===================== LOGIN ===================== -->
+    <div id="login-view" class="login-view">
+      <div class="login-card">
+        <h1 class="wordmark"><span class="rust">ruster</span>most</h1>
+        <p class="login-sub">Connect to your Mattermost server</p>
+        <form id="url-form" class="login-form">
+          <input
+            id="url-input"
+            type="text"
+            placeholder="https://mattermost.example.org"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="submit" id="connect-btn">Connect</button>
+        </form>
+        <p id="login-status" class="login-status"></p>
+      </div>
+    </div>
 
-      <form class="row" id="url-form">
-        <input id="url-input" placeholder="url for your mattermost server..." />
-        <button type="submit">Connect</button>
-      </form>
-      <p id="sso-result"></p>
-    </main>
+    <!-- ===================== APP ===================== -->
+    <div id="app-view" class="app-view hidden">
+      <aside class="sidebar">
+        <header class="sidebar-header">
+          <div class="me-avatar" id="me-avatar">?</div>
+          <div class="me-name" id="me-name">…</div>
+        </header>
+        <div class="search-wrap">
+          <input id="search-input" type="text" placeholder="Search conversations…" autocomplete="off" />
+        </div>
+        <div class="channel-list" id="channel-list">
+          <div class="list-empty">Loading channels…</div>
+        </div>
+      </aside>
+
+      <main class="conversation">
+        <div id="empty-state" class="empty-state">
+          <div>
+            <div class="empty-logo">💬</div>
+            <p>Select a conversation to start reading.</p>
+            <p class="empty-hint">New messages arrive live.</p>
+          </div>
+        </div>
+
+        <div id="chat-panel" class="chat-panel hidden">
+          <header class="chat-header">
+            <div class="chat-title" id="chat-title"></div>
+            <div class="chat-sub" id="chat-sub"></div>
+          </header>
+          <div class="messages" id="messages"></div>
+          <form class="composer" id="composer">
+            <textarea
+              id="composer-input"
+              rows="1"
+              placeholder="Type a message…  (Enter to send, Shift+Enter for a new line)"
+            ></textarea>
+            <button type="submit" id="send-btn" title="Send">➤</button>
+          </form>
+        </div>
+      </main>
+    </div>
   </body>
 </html>

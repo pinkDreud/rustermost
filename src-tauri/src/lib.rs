@@ -41,6 +41,7 @@ struct Channel {
     channel_type: String,
     display_name: String,
     name: String,
+    last_post_at: i64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -72,6 +73,15 @@ impl std::fmt::Display for AppError {
             AppError::NotLoggedIn  => write!(f, "Missing token/the token is not working - log in?"),
         }
     }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct MMUser {
+    id: String,
+    username: String,
+    first_name: String,
+    last_name: String,
+    nickname: String,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -394,6 +404,27 @@ async fn get_posts(
     Ok(posts)
 }
 
+
+#[tauri::command]
+async fn get_users_by_ids(
+    ids: Vec<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<MMUser>, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/users/ids", session.base_url);
+
+    let resp = reqwest::Client::new()
+        .post(url)
+        .bearer_auth(&session.token)
+        .json(&ids)
+        .send()
+        .await?;
+
+    let users = resp.json::<Vec<MMUser>>().await?;
+    Ok(users)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -408,7 +439,7 @@ pub fn run() {
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
             fetch_all_channels, get_cached_channels,
-            connect_websocket, send_message, get_posts])
+            connect_websocket, send_message, get_posts, get_users_by_ids])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
