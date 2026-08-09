@@ -57,6 +57,13 @@ html, body {
   box-shadow: var(--shadow);
   text-align: center;
 }
+.login-logo {
+  display: block;
+  width: 180px;
+  max-width: 70%;
+  height: auto;
+  margin: 0 auto 14px;
+}
 .wordmark {
   font-size: 30px;
   font-weight: 800;

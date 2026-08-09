@@ -53,12 +53,25 @@ const messagesEl = $("messages");
 const composer = $("composer");
 const composerInput = $("composer-input");
 
+// ================= PERSISTENCE =================
+// The Tauri webview keeps localStorage on disk across restarts, so we remember
+// the server URL and the session token here. NOTE: the token is stored in
+// plaintext in the app's webview data — fine for a dev tool, but the proper
+// version would use the OS keychain (see the roadmap).
+// Only the server URL is kept here — it is not sensitive. The token is
+// deliberately NOT stored in localStorage (that would be plaintext on disk);
+// its secure-storage path is wired in separately.
+const URL_KEY = "rustermost.url";
+function saveUrl(url) { try { localStorage.setItem(URL_KEY, url); } catch (_) {} }
+function loadUrl() { try { return localStorage.getItem(URL_KEY) || ""; } catch (_) { return ""; } }
+
 // ================= LOGIN =================
 urlForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const url = urlInput.value.trim().replace(/\/+$/, "");
   if (!url) return;
   state.baseUrl = url;
+  saveUrl(url);
   setLoginStatus("Opening SSO login window…");
   try {
     await invoke("open_sso_window", { url });
@@ -79,6 +92,15 @@ urlForm.addEventListener("submit", async (e) => {
     }
   }, 2000);
 });
+
+// On startup, prefill the last-used server URL. Secure token restore is added
+// on top of this once the storage mechanism is chosen.
+function tryRestore() {
+  const url = loadUrl();
+  if (url) urlInput.value = url;
+}
+
+tryRestore();
 
 function setLoginStatus(text, isError = false) {
   loginStatus.textContent = text;
