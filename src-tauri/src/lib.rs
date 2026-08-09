@@ -261,6 +261,43 @@ fn get_cached_channels(state: tauri::State<'_, AppState>,) -> Vec<Channel> {
     guard.clone()
 }
 
+#[tauri::command]
+async fn connect_websocket(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    use futures_util::{SinkExt, StreamExt};
+
+    let session = state.current_session()?;
+
+    let ws_url = format!("{}/api/v4/websocket", session.base_url.replace("https://", "wss://"));
+
+    tokio::spawn(
+        async move {
+        let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
+            Ok(ok) => ok,
+            Err(e) => { eprintln!("WS connect error: {}", e); return; }
+        };
+
+        let (mut write, mut read) = ws_stream.split();
+
+        let auth = serde_json::json!({
+            "seq": 1,
+            "action": "authentication_challenge",
+            "data": { "token": session.token }
+        });
+
+        let _ = write.send(tokio_tungstenite::tungstenite::Message::text(auth.to_string())).await;
+
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(m) => println!("WS >> {}", m),
+                Err(e) => { eprintln!("WS read error: {}", e); break; }
+            }
+        }
+        println!("WS closed");
+    });
+
+    Ok(()) 
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -274,7 +311,8 @@ pub fn run() {
             capture_session,
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
-            fetch_all_channels, get_cached_channels])
+            fetch_all_channels, get_cached_channels,
+            connect_websocket])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
