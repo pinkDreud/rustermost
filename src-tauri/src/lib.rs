@@ -78,6 +78,14 @@ struct Post {
     create_at: i64,
     #[serde(default)]
     file_ids: Vec<String>,
+    #[serde(default)]
+    metadata: PostMetadata,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone, Default)]
+struct PostMetadata {
+    #[serde(default)]
+    reactions: Vec<Reaction>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
@@ -99,6 +107,14 @@ struct CustomEmoji {
     id: String,
     name: String,
 }
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+struct Reaction {
+    user_id: String,
+    post_id: String,
+    emoji_name: String,
+}
+
 
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -536,6 +552,18 @@ async fn connect_websocket(
                                     let _ = app.emit("mm-post", msg);
                                 }
                             }
+                        } else if json["event"] == "reaction_added" || json["event"] == "reaction_removed" {
+                            if let Some(r_str) = json["data"]["reaction"].as_str() {
+                                if let Ok(r) = serde_json::from_str::<serde_json::Value>(r_str) {
+                                    let payload = Reaction {
+                                        user_id:    r["user_id"].as_str().unwrap_or("").to_string(),
+                                        post_id:    r["post_id"].as_str().unwrap_or("").to_string(),
+                                        emoji_name: r["emoji_name"].as_str().unwrap_or("").to_string(),
+                                    };
+                                    let name = if json["event"] == "reaction_added" { "mm-reaction-added" } else { "mm-reaction-removed" };
+                                    let _ = app.emit(name, payload);
+                                }
+                            }    
                         }
                     }
                 }
@@ -575,6 +603,7 @@ async fn view_channel(
 
     Ok(())
 }
+
 #[tauri::command]
 async fn send_message(
     channel_id: String,
@@ -598,6 +627,83 @@ async fn send_message(
         .post(&url)
         .bearer_auth(&session.token)
         .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    Ok(())
+}
+
+
+#[tauri::command]
+async fn execute_command(
+    channel_id: String,
+    team_id: String,
+    command: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/commands/execute", session.base_url);
+
+    let body = serde_json::json!({
+        "channel_id": channel_id,
+        "command": command,
+        "team_id": team_id,
+    });    
+
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&session.token)
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let answer = resp.json::<serde_json::Value>().await?;
+    
+    Ok(answer)
+}
+
+#[tauri::command]
+async fn add_reaction(
+    post_id: String,
+    emoji_name: String,
+    user_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/reactions", session.base_url);
+
+    let body = Reaction{ user_id, post_id, emoji_name };
+    
+    reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&session.token)
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    Ok(())
+}
+
+
+#[tauri::command]
+async fn remove_reaction(
+    post_id: String,
+    emoji_name: String,
+    user_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/users/{user_id}/posts/{post_id}/reactions/{emoji_name}", session.base_url);
+
+    reqwest::Client::new()
+        .delete(&url)
+        .bearer_auth(&session.token)
         .send()
         .await?
         .error_for_status()?;
@@ -859,7 +965,7 @@ pub fn run() {
             connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar, search_users, create_chat, create_named_channel,
             fetch_channel_members, fetch_all_channels_with_members, view_channel,
             get_file_info, get_file_thumbnail, get_file, upload_file,
-            get_emoji_image, get_custom_emojis])
+            get_emoji_image, get_custom_emojis, add_reaction, remove_reaction, execute_command])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

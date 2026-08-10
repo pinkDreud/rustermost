@@ -51,6 +51,7 @@ const state = {
   fileLookupEnabled: true, // flips off if the file commands aren't in the backend yet
   customEmojis: {}, // emoji name -> emoji id (server-defined custom emoji)
   emojiImages: {}, // emoji id -> data URL
+  reactions: {}, // post_id -> { emoji_name -> Set(user_id) }
   collapsed: {}, // section title -> true when folded
   avatars: {}, // user_id -> data URL (in-memory; the disk cache comes later)
   avatarPending: new Set(), // user_ids currently being fetched
@@ -156,6 +157,15 @@ async function init() {
   await listen("mm-emoji-added", (ev) => {
     const e = ev.payload;
     if (e && e.name && e.id) state.customEmojis[e.name] = e.id;
+  });
+  // Dormant until the WS loop forwards reaction_added / reaction_removed.
+  await listen("mm-reaction-added", (ev) => {
+    const r = ev.payload || {};
+    if (r.post_id && r.emoji_name && r.user_id) applyReaction(r.post_id, r.emoji_name, r.user_id, true);
+  });
+  await listen("mm-reaction-removed", (ev) => {
+    const r = ev.payload || {};
+    if (r.post_id && r.emoji_name && r.user_id) applyReaction(r.post_id, r.emoji_name, r.user_id, false);
   });
   try {
     await invoke("connect_websocket");
@@ -519,7 +529,7 @@ async function loadOlder() {
     for (const p of older) {
       const mine = state.me && p.user_id === state.me.id;
       const sender = mine ? null : realName(state.users[p.user_id]);
-      frag.appendChild(bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at, files: p.file_ids }));
+      frag.appendChild(bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at, files: p.file_ids, postId: p.id, reactions: p.metadata && p.metadata.reactions }));
     }
     messagesEl.insertBefore(frag, messagesEl.firstChild);
     messagesEl.scrollTop += messagesEl.scrollHeight - prevH; // keep the view steady
@@ -548,7 +558,7 @@ function renderMessages(posts) {
     const mine = state.me && p.user_id === state.me.id;
     const sender = mine ? null : realName(state.users[p.user_id]); // named once resolvable
     messagesEl.appendChild(
-      bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at, files: p.file_ids })
+      bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at, files: p.file_ids, postId: p.id, reactions: p.metadata && p.metadata.reactions })
     );
   }
   scrollToBottom();
@@ -875,7 +885,135 @@ async function openLightbox(id, info) {
   }
 }
 
-function bubbleEl({ mine, uid, sender, text, ts, files }) {
+// ---------- reactions ----------
+// state.reactions holds post_id -> { emoji_name -> Set(user_id) }. Seeded from
+// post metadata when history renders, kept live by the mm-reaction-* events,
+// and updated optimistically when I click. Sets make double-application (echo
+// of my own action) harmless.
+function seedReactions(postId, arr) {
+  if (state.reactions[postId]) return; // live state wins over a re-render
+  const map = {};
+  for (const r of arr || []) {
+    if (!r || !r.emoji_name || !r.user_id) continue;
+    (map[r.emoji_name] = map[r.emoji_name] || new Set()).add(r.user_id);
+  }
+  state.reactions[postId] = map;
+}
+
+function applyReaction(postId, name, userId, add) {
+  const map = (state.reactions[postId] = state.reactions[postId] || {});
+  const set = (map[name] = map[name] || new Set());
+  if (add) set.add(userId);
+  else set.delete(userId);
+  for (const el of document.querySelectorAll(`.reactions[data-post-id="${postId}"]`)) {
+    renderReactionsInto(el, postId);
+  }
+}
+
+async function toggleReaction(postId, name) {
+  const my = state.me?.id;
+  if (!my || !postId) return;
+  const cur = state.reactions[postId];
+  const has = !!(cur && cur[name] && cur[name].has(my));
+  applyReaction(postId, name, my, !has); // optimistic; reverted on failure
+  try {
+    if (has) await invoke("remove_reaction", { postId, emojiName: name, userId: my });
+    else await invoke("add_reaction", { postId, emojiName: name, userId: my });
+  } catch (e) {
+    applyReaction(postId, name, my, has);
+    console.warn("reaction command failed. Are add_reaction/remove_reaction in generate_handler!?", e);
+  }
+}
+
+function renderReactionsInto(container, postId) {
+  container.innerHTML = "";
+  const map = state.reactions[postId] || {};
+  const my = state.me?.id;
+  for (const [name, users] of Object.entries(map)) {
+    if (!users.size) continue;
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "reaction-pill" + (my && users.has(my) ? " mine" : "");
+    pill.title = `:${name}:`;
+    pill.appendChild(emojiNode(name) || document.createTextNode(`:${name}:`));
+    const cnt = document.createElement("span");
+    cnt.className = "count";
+    cnt.textContent = users.size;
+    pill.appendChild(cnt);
+    pill.addEventListener("click", () => toggleReaction(postId, name));
+    container.appendChild(pill);
+  }
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "reaction-add";
+  add.textContent = "+";
+  add.title = "Add reaction";
+  add.addEventListener("click", (e) => openReactionPicker(postId, e.currentTarget));
+  container.appendChild(add);
+}
+
+// Small floating emoji picker anchored to the clicked "+".
+const reactionPicker = document.createElement("div");
+reactionPicker.className = "reaction-picker hidden";
+document.body.appendChild(reactionPicker);
+
+function openReactionPicker(postId, anchor) {
+  reactionPicker.innerHTML = "";
+  const input = document.createElement("input");
+  input.placeholder = "Search emoji…";
+  const list = document.createElement("div");
+  list.className = "reaction-picker-list";
+  reactionPicker.appendChild(input);
+  reactionPicker.appendChild(list);
+  const refresh = () => {
+    list.innerHTML = "";
+    for (const c of emojiCandidates(input.value.trim().toLowerCase())) {
+      const row = document.createElement("div");
+      row.className = "emoji-row";
+      const glyph = document.createElement("span");
+      glyph.className = "glyph";
+      if (c.ch) {
+        glyph.textContent = c.ch;
+      } else {
+        const img = document.createElement("img");
+        img.className = "emoji";
+        img.dataset.emojiId = c.id;
+        if (state.emojiImages[c.id]) img.src = state.emojiImages[c.id];
+        else ensureEmojiImage(c.id);
+        glyph.appendChild(img);
+      }
+      const label = document.createElement("span");
+      label.textContent = `:${c.name}:`;
+      row.appendChild(glyph);
+      row.appendChild(label);
+      row.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        toggleReaction(postId, c.name);
+        closeReactionPicker();
+      });
+      list.appendChild(row);
+    }
+  };
+  input.addEventListener("input", refresh);
+  refresh();
+  const r = anchor.getBoundingClientRect();
+  reactionPicker.classList.remove("hidden");
+  reactionPicker.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 250)) + "px";
+  reactionPicker.style.top = Math.max(8, Math.min(r.bottom + 6, window.innerHeight - 320)) + "px";
+  input.focus();
+}
+
+function closeReactionPicker() {
+  reactionPicker.classList.add("hidden");
+}
+
+document.addEventListener("mousedown", (e) => {
+  if (!reactionPicker.classList.contains("hidden") && !reactionPicker.contains(e.target)) {
+    closeReactionPicker();
+  }
+});
+
+function bubbleEl({ mine, uid, sender, text, ts, files, postId, reactions }) {
   const row = document.createElement("div");
   row.className = "msg-row" + (mine ? " mine" : "");
   row.appendChild(avatarEl(uid, mine ? state.me?.username : sender));
@@ -896,6 +1034,15 @@ function bubbleEl({ mine, uid, sender, text, ts, files }) {
     el.appendChild(body);
   }
   if (files && files.length) el.appendChild(attachmentsEl(files));
+
+  if (postId) {
+    seedReactions(postId, reactions);
+    const rx = document.createElement("div");
+    rx.className = "reactions";
+    rx.dataset.postId = postId;
+    renderReactionsInto(rx, postId);
+    el.appendChild(rx);
+  }
 
   row.appendChild(el);
   return row;
@@ -997,7 +1144,7 @@ function onIncoming(event) {
     // live events carry the username but not the user_id — resolve it if we can
     const uid = mine ? state.me?.id : state.usersByName[senderClean]?.id;
     messagesEl.appendChild(
-      bubbleEl({ mine, uid, sender: mine ? null : p.sender, text: p.message, ts: Date.now(), files: p.file_ids })
+      bubbleEl({ mine, uid, sender: mine ? null : p.sender, text: p.message, ts: Date.now(), files: p.file_ids, postId: p.id })
     );
     scrollToBottom();
     if (document.hasFocus()) {
@@ -1246,6 +1393,23 @@ async function sendCurrent() {
   autoResize();
   sendBtn.disabled = true;
   try {
+    // Slash command: "/away", "/shrug lol", … → execute, don't post as text.
+    if (text.startsWith("/") && files.length === 0) {
+      const ch = state.channels.find((c) => c.id === channelId);
+      const teamId = (ch && ch.team_id) || Object.keys(state.teams)[0] || "";
+      try {
+        const res = await invoke("execute_command", { channelId, teamId, command: text });
+        recentSends[channelId] = Date.now();
+        // Ephemeral responses (visible only to me) come back directly.
+        if (res && res.text) ephemeralBubble(res.text);
+      } catch (e) {
+        console.warn("execute_command unavailable — sent as plain message. Is it in generate_handler!?", e);
+        await invoke("send_message", { channelId, message: text });
+        recentSends[channelId] = Date.now();
+      }
+      return;
+    }
+
     const fileIds = [];
     for (const f of files) {
       const b64 = await readFileB64(f);
@@ -1269,6 +1433,22 @@ async function sendCurrent() {
   } finally {
     sendBtn.disabled = false;
   }
+}
+
+// Server reply to a slash command that only I should see.
+function ephemeralBubble(text) {
+  const wrap = document.createElement("div");
+  wrap.className = "ephemeral";
+  const body = document.createElement("div");
+  body.className = "ephemeral-body";
+  body.appendChild(renderMarkdown(text));
+  const tag = document.createElement("div");
+  tag.className = "ephemeral-tag";
+  tag.textContent = "Only visible to you";
+  wrap.appendChild(body);
+  wrap.appendChild(tag);
+  messagesEl.appendChild(wrap);
+  scrollToBottom();
 }
 
 function autoResize() {

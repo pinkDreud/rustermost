@@ -536,3 +536,85 @@ img.emoji {
 .emoji-row.sel, .emoji-row:hover { background: var(--bg-3); }
 .emoji-row .glyph { width: 1.6em; text-align: center; font-size: 16px; line-height: 1; }
 .emoji-row img.emoji { height: 18px; }
+
+/* ---------- reactions ---------- */
+.reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.reaction-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.reaction-pill:hover { border-color: var(--accent-dim); }
+.reaction-pill.mine {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+.reaction-pill .count { font-size: 11px; color: var(--text-dim); }
+.reaction-pill.mine .count { color: var(--text); }
+.reaction-add {
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  color: var(--text-faint);
+  padding: 2px 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.msg-row:hover .reaction-add { opacity: 1; }
+.reaction-add:hover { color: var(--text); border-color: var(--accent-dim); }
+.reaction-picker {
+  position: fixed;
+  width: 240px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  z-index: 60;
+  overflow: hidden;
+}
+.reaction-picker input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.reaction-picker-list { max-height: 240px; overflow-y: auto; }
+
+/* ---------- ephemeral (slash command replies) ---------- */
+.ephemeral {
+  align-self: center;
+  max-width: 80%;
+  margin: 6px 0;
+  text-align: center;
+}
+.ephemeral-body {
+  background: var(--bg-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.ephemeral-tag {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 3px;
+}
