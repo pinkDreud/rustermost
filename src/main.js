@@ -855,16 +855,27 @@ function formatTime(ts) {
 async function notify(title, body) {
   try {
     const n = window.__TAURI__ && window.__TAURI__.notification;
-    if (!n) return;
+    if (!n) { console.warn("[notify] plugin API not present on window.__TAURI__"); return; }
     let granted = await n.isPermissionGranted();
-    if (!granted) granted = (await n.requestPermission()) === "granted";
-    if (granted) n.sendNotification({ title, body: body || "" });
-  } catch (_) {
-    /* plugin missing or permission denied — ignore */
+    console.log("[notify] permission granted:", granted);
+    if (!granted) {
+      const res = await n.requestPermission();
+      console.log("[notify] requestPermission ->", res);
+      granted = res === "granted";
+    }
+    if (granted) {
+      n.sendNotification({ title, body: body || "" });
+      console.log("[notify] sent:", title);
+    } else {
+      console.warn("[notify] permission not granted — no notification shown");
+    }
+  } catch (e) {
+    console.warn("[notify] failed:", e);
   }
 }
 
 const seenPostIds = new Set(); // dedupe guard (needs `id` on the WS payload)
+const recentSends = {}; // channelId -> when THIS window last sent there (to tell echo from other-device sends)
 
 function onIncoming(event) {
   const p = event.payload; // { channel_id, sender, message, id? }
@@ -901,11 +912,15 @@ function onIncoming(event) {
   // Wrapped so a notification hiccup can never block rendering the message —
   // an undefined helper here once silently ate all incoming messages.
   try {
-    if (!mine && (!document.hasFocus() || p.channel_id !== state.activeId)) {
+    // "mine" but not sent from this window = me on another device — worth a toast.
+    const isOwnEcho = mine && Date.now() - (recentSends[p.channel_id] || 0) < 7000;
+    if (!isOwnEcho && (!document.hasFocus() || p.channel_id !== state.activeId)) {
       const su = state.usersByName[senderClean];
       const who = (su && realName(su)) || p.sender || "New message";
       const title = ch && !isDM(ch) ? `${who} · ${displayName(ch)}` : who;
-      notify(title, p.message);
+      const nFiles = p.file_ids ? p.file_ids.length : 0;
+      const body = p.message || (nFiles ? (nFiles === 1 ? "📎 Sent an attachment" : `📎 Sent ${nFiles} attachments`) : "");
+      notify(title, body);
     }
   } catch (e) {
     console.error("notification failed (message still rendered)", e);
@@ -1073,6 +1088,7 @@ async function sendCurrent() {
     const args = { channelId, message: text };
     if (fileIds.length) args.fileIds = fileIds;
     await invoke("send_message", args);
+    recentSends[channelId] = Date.now(); // so the echo isn't mistaken for another device
     // The message echoes back via the "mm-post" event and is appended there,
     // so we don't render it manually here.
     pendingFiles.length = 0;
