@@ -973,7 +973,7 @@ pub fn run() {
             fetch_channel_members, fetch_all_channels_with_members, view_channel,
             get_file_info, get_file_thumbnail, get_file, upload_file,
             get_emoji_image, get_custom_emojis, add_reaction, remove_reaction, execute_command])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app, event| {
             #[cfg(target_os = "macos")]
