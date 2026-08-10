@@ -587,6 +587,139 @@ async function ensureAvatar(uid) {
   }
 }
 
+// ---------- markdown ----------
+// Minimal chat-flavored markdown, rendered by BUILDING DOM NODES — message
+// content never goes through innerHTML, so it can't inject markup. Supported:
+// [label](url), bare http(s) URLs, **bold**, *italic*/_italic_, ~~strike~~,
+// `code`, ``` fenced blocks ```, > quotes, -/*/1. lists. Everything else is
+// plain text.
+
+// Open in the system browser via the opener plugin; never navigate the webview.
+async function openExternal(url) {
+  try {
+    await window.__TAURI__.opener.openUrl(url);
+  } catch (e) {
+    console.warn("opener failed for", url, e);
+  }
+}
+
+function linkEl(href, label) {
+  const a = document.createElement("a");
+  a.href = href;
+  a.textContent = label;
+  a.title = href;
+  a.addEventListener("click", (e) => {
+    e.preventDefault();
+    openExternal(href);
+  });
+  return a;
+}
+
+// Inline spans: code / bold / strike / italic / [label](url) / bare url.
+function inlineMd(target, text, depth = 0) {
+  if (!text) return;
+  if (depth > 2) { target.appendChild(document.createTextNode(text)); return; }
+  const re = /(`([^`]+)`)|(\*\*([^*]+)\*\*)|(~~([^~]+)~~)|(\*([^*\s][^*]*?)\*)|(\b_([^_\s][^_]*?)_\b)|(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>]+)/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) target.appendChild(document.createTextNode(text.slice(last, m.index)));
+    if (m[1]) {
+      const c = document.createElement("code");
+      c.textContent = m[2];
+      target.appendChild(c);
+    } else if (m[3]) {
+      const b = document.createElement("strong");
+      inlineMd(b, m[4], depth + 1);
+      target.appendChild(b);
+    } else if (m[5]) {
+      const s = document.createElement("s");
+      inlineMd(s, m[6], depth + 1);
+      target.appendChild(s);
+    } else if (m[7]) {
+      const em = document.createElement("em");
+      inlineMd(em, m[8], depth + 1);
+      target.appendChild(em);
+    } else if (m[9]) {
+      const em = document.createElement("em");
+      inlineMd(em, m[10], depth + 1);
+      target.appendChild(em);
+    } else if (m[11]) {
+      target.appendChild(linkEl(m[13], m[12]));
+    } else if (m[14]) {
+      // bare URL — drop trailing punctuation that's almost never part of it
+      let url = m[14];
+      const trail = url.match(/[),.;:!?'"]+$/);
+      if (trail && !(trail[0].startsWith(")") && url.includes("("))) {
+        url = url.slice(0, -trail[0].length);
+        re.lastIndex -= trail[0].length;
+      }
+      target.appendChild(linkEl(url, url));
+    }
+    last = re.lastIndex;
+  }
+  if (last < text.length) target.appendChild(document.createTextNode(text.slice(last)));
+}
+
+const FENCE_RE = /^\s*```/;
+const QUOTE_RE = /^>\s?/;
+const UL_RE = /^\s*[-*]\s+/;
+const OL_RE = /^\s*\d+\.\s+/;
+const startsBlock = (line) => FENCE_RE.test(line) || QUOTE_RE.test(line) || UL_RE.test(line) || OL_RE.test(line);
+
+function renderMarkdown(text) {
+  const frag = document.createDocumentFragment();
+  const lines = String(text || "").split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (FENCE_RE.test(line)) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !FENCE_RE.test(lines[i])) buf.push(lines[i++]);
+      i++; // closing fence (or end of message)
+      const pre = document.createElement("pre");
+      const code = document.createElement("code");
+      code.textContent = buf.join("\n");
+      pre.appendChild(code);
+      frag.appendChild(pre);
+      continue;
+    }
+
+    if (QUOTE_RE.test(line)) {
+      const bq = document.createElement("blockquote");
+      let first = true;
+      while (i < lines.length && QUOTE_RE.test(lines[i])) {
+        if (!first) bq.appendChild(document.createElement("br"));
+        inlineMd(bq, lines[i].replace(QUOTE_RE, ""));
+        first = false;
+        i++;
+      }
+      frag.appendChild(bq);
+      continue;
+    }
+
+    if (UL_RE.test(line) || OL_RE.test(line)) {
+      const itemRe = OL_RE.test(line) ? OL_RE : UL_RE;
+      const list = document.createElement(itemRe === OL_RE ? "ol" : "ul");
+      while (i < lines.length && itemRe.test(lines[i])) {
+        const li = document.createElement("li");
+        inlineMd(li, lines[i].replace(itemRe, ""));
+        list.appendChild(li);
+        i++;
+      }
+      frag.appendChild(list);
+      continue;
+    }
+
+    inlineMd(frag, line);
+    i++;
+    if (i < lines.length && !startsBlock(lines[i])) frag.appendChild(document.createElement("br"));
+  }
+  return frag;
+}
+
 // ---------- attachments ----------
 async function fileInfo(id) {
   if (state.fileInfos[id]) return state.fileInfos[id];
@@ -686,7 +819,7 @@ function bubbleEl({ mine, uid, sender, text, ts, files }) {
   if (text) {
     const body = document.createElement("div");
     body.className = "msg-body";
-    body.textContent = text; // textContent — never inject message HTML
+    body.appendChild(renderMarkdown(text)); // DOM nodes only — never innerHTML
     el.appendChild(body);
   }
   if (files && files.length) el.appendChild(attachmentsEl(files));
