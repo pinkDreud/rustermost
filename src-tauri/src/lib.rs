@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use tauri::{Manager, utils::mime_type};
+use tauri::Manager;
 use std::sync::Mutex;
 
 #[derive(Clone)]
