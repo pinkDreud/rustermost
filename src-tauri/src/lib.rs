@@ -11,6 +11,7 @@ struct Session {
 struct AppState {
     session: Mutex<Option<Session>>,
     channels: Mutex<Vec<Channel>>,
+    ws_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl AppState {
@@ -43,7 +44,24 @@ struct Channel {
     name: String,
     team_id: String,
     last_post_at: i64,
+    total_msg_count: i64,
 }
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+struct ChannelMember {
+    channel_id: String,
+    msg_count: i64,
+    mention_count: i64,
+    last_viewed_at: i64,
+}
+
+#[derive(serde::Serialize)]
+struct ChannelWithMember {
+    #[serde(flatten)]
+    channel: Channel,
+    member: Option<ChannelMember>,
+}
+
 
 #[derive(Debug, serde::Serialize)]
 struct ChannelGroups {
@@ -220,6 +238,28 @@ async fn fetch_channels(
     Ok(channels)
 }
 
+
+#[tauri::command]
+async fn fetch_channel_members( // fetches all the info about the channel
+    team_id: String,
+    state: tauri::State<'_, AppState>
+) -> Result<Vec<ChannelMember>, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/users/me/teams/{}/channels/members", session.base_url, team_id);
+
+    let resp = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(session.token)
+        .send()
+        .await?;
+
+    let channel_member = resp.json::<Vec<ChannelMember>>().await?;
+
+    Ok(channel_member)
+}
+
+
 #[tauri::command]
 async fn fetch_grouped_channels(
     team_id : String,
@@ -287,6 +327,68 @@ async fn fetch_all_channels(
     Ok(all)
 }
 
+
+async fn members_for_team(
+    base_url: &str,
+    token: &str,
+    team_id: &str,
+) -> Result<Vec<ChannelMember>, AppError> {
+    let url = format!("{}/api/v4/users/me/teams/{}/channels/members", base_url, team_id);
+    let resp = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await?;
+    Ok(resp.json::<Vec<ChannelMember>>().await?)
+}
+
+#[tauri::command]
+async fn fetch_all_channels_with_members(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ChannelWithMember>, AppError> {
+    let session = state.current_session()?;
+
+    let teams = teams_for(&session.base_url, &session.token).await?;
+
+    let mut all: Vec<Channel> = Vec::new();
+    let mut all_members: Vec<ChannelMember> = Vec::new();
+
+    for team in &teams {
+        let chans = channels_for_team(&session.base_url, &session.token, &team.id).await?;
+        all.extend(chans);
+        let members = members_for_team(&session.base_url, &session.token, &team.id).await?;
+        all_members.extend(members);
+    }
+
+    use std::collections::{HashMap, HashSet};
+
+    // channels: dedupe DMs that appear in every team
+    let mut seen = HashSet::new();
+    all.retain(|c| seen.insert(c.id.clone()));
+
+    // members: turn the list into a lookup by channel id (dedupes for free)
+    let mut members_by_channel: HashMap<String, ChannelMember> = HashMap::new();
+    for m in all_members {
+        members_by_channel.insert(m.channel_id.clone(), m);
+    }
+
+    // cache while `all` still exists — the merge loop below consumes it
+    {
+        let mut cache = state.channels.lock().unwrap();
+        *cache = all.clone();
+    }
+
+    let mut all_with_members: Vec<ChannelWithMember> = Vec::new();
+    for chan in all {
+        all_with_members.push(ChannelWithMember {
+            member: members_by_channel.remove(&chan.id),
+            channel: chan,
+        });
+    }
+
+    Ok(all_with_members)
+}
+
 #[tauri::command]
 fn get_cached_channels(state: tauri::State<'_, AppState>,) -> Vec<Channel> {
     let guard = state.channels.lock().unwrap();
@@ -300,12 +402,15 @@ async fn connect_websocket(
 ) -> Result<(), AppError> {
     use futures_util::{SinkExt, StreamExt};
     use tauri::Emitter;   
-
+    {
+        let mut guard = state.ws_task.lock().unwrap();
+        if let Some(h) = guard.take() { h.abort(); }
+    }
     let session = state.current_session()?;
 
     let ws_url = format!("{}/api/v4/websocket", session.base_url.replace("https://", "wss://"));
 
-    tokio::spawn(
+    let join_handle = tokio::spawn(
         async move {
         let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
             Ok(ok) => ok,
@@ -347,10 +452,37 @@ async fn connect_websocket(
         }
         println!("WS closed");
     });
-
+    {
+        let mut guard = state.ws_task.lock().unwrap();
+        *guard = Some(join_handle);
+    }
     Ok(()) 
 }
 
+
+#[tauri::command]
+async fn view_channel(
+    channel_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/channels/members/me/view", session.base_url);
+
+    let body = serde_json::json!({
+            "channel_id": channel_id,
+    });
+
+     reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&session.token)
+        .json(&body)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    Ok(())
+}
 
 #[tauri::command]
 async fn send_message(
@@ -538,6 +670,7 @@ pub fn run() {
         .manage(AppState {
             session: Mutex::new(None),
             channels: Mutex::new(Vec::new()),   // parte vuota
+            ws_task:  Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_app_status, open_sso_window, 
@@ -545,7 +678,8 @@ pub fn run() {
             fetch_me, fetch_teams, 
             fetch_channels, fetch_grouped_channels,
             fetch_all_channels, get_cached_channels,
-            connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar, search_users, create_chat, create_named_channel])
+            connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar, search_users, create_chat, create_named_channel,
+            fetch_channel_members, fetch_all_channels_with_members, view_channel])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

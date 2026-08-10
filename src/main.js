@@ -16,6 +16,12 @@
 //        - searching direct messages by person name.
 //      Until then those degrade gracefully (anonymous "Direct message", no author
 //      label on history), and the command is probed once and then left alone.
+//   3. fetch_all_channels_with_members + view_channel commands — unread badges
+//      are seeded from the server's read-state (total_msg_count - member.msg_count)
+//      and reads are reported back so other devices clear their badges too.
+//      Falls back to fetch_all_channels and session-local badges.
+//   4. "mm-viewed" event — once the WS loop forwards channel_viewed, channels
+//      read on my other devices clear their badge here live.
 
 const invoke = window.__TAURI__.core.invoke;
 const listen = window.__TAURI__.event.listen;
@@ -32,6 +38,7 @@ const state = {
   teams: {}, // team_id -> team display name
   activity: {}, // channelId -> last-activity ms (learned live; complements last_post_at)
   userLookupEnabled: true, // flips off if get_users_by_ids isn't in the backend yet
+  canViewChannel: true, // flips off if view_channel isn't in the backend yet
   collapsed: {}, // section title -> true when folded
   avatars: {}, // user_id -> data URL (in-memory; the disk cache comes later)
   avatarPending: new Set(), // user_ids currently being fetched
@@ -132,6 +139,7 @@ async function init() {
 
   // start listening BEFORE connecting so we don't miss events
   await listen("mm-post", onIncoming);
+  await listen("mm-viewed", onViewedElsewhere);
   try {
     await invoke("connect_websocket");
   } catch (e) {
@@ -146,9 +154,10 @@ async function init() {
     console.error("fetch_teams failed", e);
   }
 
-  // channels (slow: hits every team once)
+  // channels + read-state (slow: hits every team twice)
   try {
-    state.channels = await invoke("fetch_all_channels");
+    state.channels = await loadChannels();
+    seedUnread();
     renderSidebar();
     // Try to name the 1:1 DM partners (no-op until get_users_by_ids exists).
     resolveUsers(collectDmPartnerIds()).then(() => renderSidebar());
@@ -156,6 +165,58 @@ async function init() {
     console.error("fetch_all_channels failed", e);
     channelList.innerHTML = '<div class="list-empty">Failed to load channels.</div>';
   }
+}
+
+// Channels enriched with my read-state, in one call. Falls back to the plain
+// channel list if fetch_all_channels_with_members isn't in the backend yet —
+// same objects, just without the `member` field.
+async function loadChannels() {
+  try {
+    return await invoke("fetch_all_channels_with_members");
+  } catch (e) {
+    console.warn("fetch_all_channels_with_members unavailable (badges will be session-only). Is it in generate_handler!?", e);
+    return await invoke("fetch_all_channels");
+  }
+}
+
+// Initial badges: how many of the channel's messages my member record says I
+// haven't seen yet. No member data (fallback path, brand-new channel) → no badge.
+function seedUnread() {
+  for (const ch of state.channels) {
+    if (!ch.member) continue;
+    const n = ch.total_msg_count - ch.member.msg_count;
+    if (n > 0) state.unread[ch.id] = n;
+  }
+}
+
+// Mark a conversation read: clear the badge immediately (optimistic), then tell
+// the server so my other devices clear too and the next launch seeds correctly.
+// Throttled per channel; degrades to local-only if view_channel is missing.
+const viewedAt = {}; // channelId -> when we last told the server
+async function markViewed(channelId) {
+  if (!channelId) return;
+  state.unread[channelId] = 0;
+  if (!state.canViewChannel) return;
+  const now = Date.now();
+  if (viewedAt[channelId] && now - viewedAt[channelId] < 1500) return;
+  viewedAt[channelId] = now;
+  try {
+    await invoke("view_channel", { channelId });
+  } catch (e) {
+    state.canViewChannel = false; // command not registered yet
+    console.warn("view_channel unavailable (reads won't sync to other devices). Is it in generate_handler!?", e);
+  }
+}
+
+// One of my other devices read a channel. Dormant until the backend's WS loop
+// forwards channel_viewed as "mm-viewed"; payload may be the channel id itself
+// or an object carrying channel_id.
+function onViewedElsewhere(event) {
+  const p = event.payload;
+  const id = typeof p === "string" ? p : p && p.channel_id;
+  if (!id || !state.unread[id]) return;
+  state.unread[id] = 0;
+  renderSidebar();
 }
 
 function renderMe() {
@@ -274,18 +335,23 @@ function renderSidebar() {
   const q = (searchInput.value || "").toLowerCase();
   const match = (ch) => searchText(ch).includes(q);
 
+  const unread = state.channels.filter((c) => (state.unread[c.id] || 0) > 0 && match(c));
   const direct = state.channels.filter((c) => c.type === "D" && match(c));
   const groups = state.channels.filter((c) => c.type === "G" && match(c));
   const community = state.channels.filter((c) => (c.type === "O" || c.type === "P") && match(c));
 
   // Most-recent conversation first (stable when timestamps are equal).
   const byRecency = (a, b) => activityOf(b) - activityOf(a);
+  unread.sort(byRecency);
   direct.sort(byRecency);
   groups.sort(byRecency);
   community.sort(byRecency);
 
   const searching = q.length > 0;
   channelList.innerHTML = "";
+  // Pinned on top, only while something is actually unread; conversations
+  // stay in their own section below as well.
+  if (unread.length) channelList.appendChild(sectionEl("Unread", unread, searching));
   channelList.appendChild(sectionEl("Direct messages", direct, searching));
   channelList.appendChild(sectionEl("Groups", groups, searching));
   channelList.appendChild(sectionEl("Community", community, searching));
@@ -366,7 +432,7 @@ function channelItemEl(ch) {
 // ================= CONVERSATION =================
 async function openChannel(id) {
   state.activeId = id;
-  state.unread[id] = 0;
+  markViewed(id); // clears the badge locally, reports the read to the server
   renderSidebar();
 
   const ch = state.channels.find((c) => c.id === id);
@@ -567,9 +633,22 @@ async function notify(title, body) {
   }
 }
 
+const seenPostIds = new Set(); // dedupe guard (needs `id` on the WS payload)
+
 function onIncoming(event) {
-  const p = event.payload; // { channel_id, sender, message }
+  const p = event.payload; // { channel_id, sender, message, id? }
   if (!p) return;
+
+  // Same post delivered twice (duplicate WS connection, reconnect race) → drop.
+  // Only possible once the backend includes the post id in IncomingMessage.
+  if (p.id) {
+    if (seenPostIds.has(p.id)) return;
+    seenPostIds.add(p.id);
+    if (seenPostIds.size > 500) {
+      const oldest = seenPostIds.values().next().value;
+      seenPostIds.delete(oldest);
+    }
+  }
 
   // Bump this conversation up the list (live activity ordering).
   state.activity[p.channel_id] = Date.now();
@@ -603,6 +682,12 @@ function onIncoming(event) {
       bubbleEl({ mine, uid, sender: mine ? null : p.sender, text: p.message, ts: Date.now() })
     );
     scrollToBottom();
+    if (document.hasFocus()) {
+      markViewed(p.channel_id); // keep the server's watermark caught up
+    } else if (!mine) {
+      // open but not looking — badge it; cleared when the window regains focus
+      state.unread[p.channel_id] = (state.unread[p.channel_id] || 0) + 1;
+    }
   } else {
     state.unread[p.channel_id] = (state.unread[p.channel_id] || 0) + 1;
   }
@@ -626,6 +711,13 @@ composerInput.addEventListener("input", autoResize);
 // Scroll near the top of the message pane → pull in older history.
 messagesEl.addEventListener("scroll", () => {
   if (messagesEl.scrollTop < 80) loadOlder();
+});
+
+// Coming back to the window means reading the open conversation.
+window.addEventListener("focus", () => {
+  if (!state.activeId) return;
+  markViewed(state.activeId);
+  renderSidebar();
 });
 
 async function sendCurrent() {
