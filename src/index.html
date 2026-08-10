@@ -60,7 +60,10 @@
             <div class="chat-sub" id="chat-sub"></div>
           </header>
           <div class="messages" id="messages"></div>
+          <div id="pending-files" class="pending-files hidden"></div>
           <form class="composer" id="composer">
+            <button type="button" id="attach-btn" class="attach-btn" title="Attach files">📎</button>
+            <input id="file-input" type="file" multiple class="hidden" />
             <textarea
               id="composer-input"
               rows="1"

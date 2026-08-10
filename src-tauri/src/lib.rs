@@ -569,21 +569,24 @@ async fn view_channel(
 
     Ok(())
 }
-
 #[tauri::command]
 async fn send_message(
     channel_id: String,
     message: String,
+    file_ids: Option<Vec<String>>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
     let session = state.current_session()?;
 
     let url = format!("{}/api/v4/posts", session.base_url);
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
             "channel_id": channel_id,
             "message": message,
     });
+    if let Some(ids) = file_ids {
+        body["file_ids"] = serde_json::json!(ids);
+    }
 
      reqwest::Client::new()
         .post(&url)
@@ -747,6 +750,41 @@ async fn create_named_channel(
     let channel = resp.json::<Channel>().await?;
     Ok(channel)
 }
+#[tauri::command]
+async fn upload_file(
+    channel_id: String,
+    filename: String,
+    data_b64: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, AppError> {
+    use base64::Engine;
+
+    #[derive(serde::Deserialize)]
+    struct FileUploadResponse {
+        file_infos: Vec<FileInfo>,
+    }
+
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(&data_b64)
+        .map_err(|e| AppError::Network(e.to_string()))?;
+
+    let session = state.current_session()?;
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/api/v4/files", session.base_url))
+        .query(&[("channel_id", &channel_id), ("filename", &filename)])
+        .bearer_auth(&session.token)
+        .body(data)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let parsed = resp.json::<FileUploadResponse>().await?;
+
+    parsed.file_infos.first().map(|f| f.id.clone())
+        .ok_or(AppError::Network("upload returned no file info".into()))
+}
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -766,7 +804,7 @@ pub fn run() {
             fetch_all_channels, get_cached_channels,
             connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar, search_users, create_chat, create_named_channel,
             fetch_channel_members, fetch_all_channels_with_members, view_channel,
-            get_file_info, get_file_thumbnail, get_file])
+            get_file_info, get_file_thumbnail, get_file, upload_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

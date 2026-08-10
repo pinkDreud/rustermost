@@ -25,6 +25,9 @@
 //   5. get_file_info / get_file_thumbnail / get_file commands — attachments on
 //      posts (Post.file_ids) render as inline images (click = full view) or
 //      file chips. Until then attachments show as a plain "📎 attachment" tag.
+//   6. upload_file command (+ send_message accepting file_ids) — the 📎 button
+//      and pasted images actually send. Until then attaching shows an error
+//      chip and the message text is preserved.
 
 const invoke = window.__TAURI__.core.invoke;
 const listen = window.__TAURI__.event.listen;
@@ -943,20 +946,133 @@ window.addEventListener("focus", () => {
   renderSidebar();
 });
 
+// ---------- outgoing attachments ----------
+const attachBtn = $("attach-btn");
+const fileInput = $("file-input");
+const pendingFilesEl = $("pending-files");
+const pendingFiles = []; // File objects queued for the next send
+const sendBtn = $("send-btn");
+
+attachBtn.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => {
+  for (const f of fileInput.files) pendingFiles.push(f);
+  fileInput.value = ""; // allow re-picking the same file later
+  renderPendingFiles();
+});
+
+// Paste an image (screenshot) straight into the composer.
+composerInput.addEventListener("paste", (e) => {
+  const items = e.clipboardData ? e.clipboardData.items : [];
+  let got = false;
+  for (const it of items) {
+    if (it.kind === "file") {
+      const f = it.getAsFile();
+      if (f) { pendingFiles.push(f); got = true; }
+    }
+  }
+  if (got) {
+    e.preventDefault();
+    renderPendingFiles();
+  }
+});
+
+function renderPendingFiles(errorText) {
+  pendingFilesEl.innerHTML = "";
+  pendingFilesEl.classList.toggle("hidden", pendingFiles.length === 0 && !errorText);
+  pendingFiles.forEach((f, idx) => {
+    const chip = document.createElement("div");
+    chip.className = "chip";
+    const label = document.createElement("span");
+    label.textContent = `📎 ${f.name || "image"} · ${formatSize(f.size)}`;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "✕";
+    x.addEventListener("click", () => {
+      pendingFiles.splice(idx, 1);
+      renderPendingFiles();
+    });
+    chip.appendChild(label);
+    chip.appendChild(x);
+    pendingFilesEl.appendChild(chip);
+  });
+  if (errorText) {
+    const err = document.createElement("div");
+    err.className = "pending-error";
+    err.textContent = errorText;
+    pendingFilesEl.appendChild(err);
+  }
+}
+
+// Drag & drop files onto the conversation to attach them. NOTE: needs
+// "dragDropEnabled": false on the window in tauri.conf.json — with Tauri's
+// own drag-drop handling on (the default), these HTML5 events never fire.
+let dragDepth = 0; // enter/leave fire per child element; count to know when we're really out
+
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault()); // never let the webview navigate to a dropped file
+
+chatPanel.addEventListener("dragenter", (e) => {
+  if (!state.activeId) return;
+  const types = e.dataTransfer ? Array.from(e.dataTransfer.types) : [];
+  if (!types.includes("Files")) return;
+  dragDepth++;
+  chatPanel.classList.add("drag-over");
+});
+chatPanel.addEventListener("dragleave", () => {
+  if (dragDepth > 0 && --dragDepth === 0) chatPanel.classList.remove("drag-over");
+});
+chatPanel.addEventListener("drop", (e) => {
+  dragDepth = 0;
+  chatPanel.classList.remove("drag-over");
+  if (!state.activeId || !e.dataTransfer) return;
+  let got = false;
+  for (const f of e.dataTransfer.files) {
+    pendingFiles.push(f);
+    got = true;
+  }
+  if (got) renderPendingFiles();
+});
+
+// File -> bare base64 (data URL prefix stripped) for the invoke bridge.
+function readFileB64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",", 2)[1] || "");
+    r.onerror = () => reject(r.error || new Error("read failed"));
+    r.readAsDataURL(file);
+  });
+}
+
 async function sendCurrent() {
   const text = composerInput.value.trim();
-  if (!text || !state.activeId) return;
+  const files = pendingFiles.slice();
+  if ((!text && !files.length) || !state.activeId) return;
+  const channelId = state.activeId;
   composerInput.value = "";
   autoResize();
+  sendBtn.disabled = true;
   try {
-    await invoke("send_message", { channelId: state.activeId, message: text });
+    const fileIds = [];
+    for (const f of files) {
+      const b64 = await readFileB64(f);
+      const id = await invoke("upload_file", { channelId, filename: f.name || "image.png", dataB64: b64 });
+      if (id) fileIds.push(id);
+    }
+    const args = { channelId, message: text };
+    if (fileIds.length) args.fileIds = fileIds;
+    await invoke("send_message", args);
     // The message echoes back via the "mm-post" event and is appended there,
     // so we don't render it manually here.
+    pendingFiles.length = 0;
+    renderPendingFiles();
   } catch (e) {
-    console.error("send_message failed", e);
-    // put the text back so it isn't lost
+    console.error("send failed", e);
+    // put the text back and keep the files so nothing is lost
     composerInput.value = text;
     autoResize();
+    renderPendingFiles("Sending failed: " + e);
+  } finally {
+    sendBtn.disabled = false;
   }
 }
 

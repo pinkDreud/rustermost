@@ -460,3 +460,45 @@ select.modal-input { appearance: none; cursor: pointer; }
   color: var(--text-dim);
 }
 .msg-body ul, .msg-body ol { margin: 4px 0; padding-left: 20px; }
+
+/* ---------- outgoing attachments ---------- */
+.attach-btn {
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 18px;
+  padding: 8px 6px;
+  border-radius: 8px;
+  line-height: 1;
+}
+.attach-btn:hover { background: var(--bg-2); color: var(--text); }
+.pending-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 20px 0;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+}
+.pending-error {
+  color: var(--danger);
+  font-size: 12px;
+  align-self: center;
+}
+
+/* ---------- drag & drop ---------- */
+.chat-panel.drag-over { position: relative; }
+.chat-panel.drag-over::after {
+  content: "Drop to attach 📎";
+  position: absolute;
+  inset: 8px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: rgba(79, 140, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  color: var(--accent);
+  pointer-events: none;
+  z-index: 10;
+}
