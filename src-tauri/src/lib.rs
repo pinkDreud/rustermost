@@ -94,6 +94,12 @@ struct PostList {
     posts: std::collections::HashMap<String, Post>,
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+struct CustomEmoji {
+    id: String,
+    name: String,
+}
+
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -654,6 +660,54 @@ async fn get_avatar(
 }
 
 
+#[tauri::command]
+async fn get_custom_emojis(
+    page: i64,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<CustomEmoji>, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/emoji?page={page}&per_page=200&sort=name", session.base_url);
+
+    let resp = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(&session.token)
+        .send()
+        .await?;
+
+    let emojis = resp.json::<Vec<CustomEmoji>>().await?;
+    
+    Ok(emojis)
+}
+
+#[tauri::command]
+async fn get_emoji_image(
+    emoji_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/emoji/{emoji_id}/image", session.base_url);
+    let resp = reqwest::Client::new()
+        .get(url)
+        .bearer_auth(&session.token)
+        .send()
+        .await?;
+
+    
+    let mime = resp.headers().get(reqwest::header::CONTENT_TYPE)
+    .and_then(|v| v.to_str().ok())
+    .unwrap_or("image/png")
+    .to_string();
+
+    let bytes = resp.bytes().await?;
+
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+
+}
+
 
 #[tauri::command]
 async fn get_users_by_ids(
@@ -804,7 +858,8 @@ pub fn run() {
             fetch_all_channels, get_cached_channels,
             connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar, search_users, create_chat, create_named_channel,
             fetch_channel_members, fetch_all_channels_with_members, view_channel,
-            get_file_info, get_file_thumbnail, get_file, upload_file])
+            get_file_info, get_file_thumbnail, get_file, upload_file,
+            get_emoji_image, get_custom_emojis])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

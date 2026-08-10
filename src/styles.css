@@ -502,3 +502,37 @@ select.modal-input { appearance: none; cursor: pointer; }
   pointer-events: none;
   z-index: 10;
 }
+
+/* ---------- emoji ---------- */
+img.emoji {
+  height: 1.35em;
+  width: auto;
+  vertical-align: -0.25em;
+  display: inline-block;
+}
+.composer { position: relative; }
+.emoji-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 52px;
+  margin-bottom: 6px;
+  min-width: 230px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  z-index: 50;
+}
+.emoji-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+.emoji-row.sel, .emoji-row:hover { background: var(--bg-3); }
+.emoji-row .glyph { width: 1.6em; text-align: center; font-size: 16px; line-height: 1; }
+.emoji-row img.emoji { height: 18px; }

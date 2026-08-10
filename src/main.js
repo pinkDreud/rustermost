@@ -29,6 +29,8 @@
 //      and pasted images actually send. Until then attaching shows an error
 //      chip and the message text is preserved.
 
+import { EMOJI } from "./emoji-data.js";
+
 const invoke = window.__TAURI__.core.invoke;
 const listen = window.__TAURI__.event.listen;
 
@@ -47,6 +49,8 @@ const state = {
   canViewChannel: true, // flips off if view_channel isn't in the backend yet
   fileInfos: {}, // file_id -> { name, size, mime_type, ... }
   fileLookupEnabled: true, // flips off if the file commands aren't in the backend yet
+  customEmojis: {}, // emoji name -> emoji id (server-defined custom emoji)
+  emojiImages: {}, // emoji id -> data URL
   collapsed: {}, // section title -> true when folded
   avatars: {}, // user_id -> data URL (in-memory; the disk cache comes later)
   avatarPending: new Set(), // user_ids currently being fetched
@@ -148,6 +152,11 @@ async function init() {
   // start listening BEFORE connecting so we don't miss events
   await listen("mm-post", onIncoming);
   await listen("mm-viewed", onViewedElsewhere);
+  // Dormant until the WS loop forwards emoji_added: new custom emoji register live.
+  await listen("mm-emoji-added", (ev) => {
+    const e = ev.payload;
+    if (e && e.name && e.id) state.customEmojis[e.name] = e.id;
+  });
   try {
     await invoke("connect_websocket");
   } catch (e) {
@@ -161,6 +170,8 @@ async function init() {
   } catch (e) {
     console.error("fetch_teams failed", e);
   }
+
+  loadCustomEmojis(); // in parallel with channels; probes and degrades
 
   // channels + read-state (slow: hits every team twice)
   try {
@@ -595,6 +606,57 @@ async function ensureAvatar(uid) {
   }
 }
 
+// ---------- emoji ----------
+// Unicode shortcodes come from the vendored EMOJI table; custom server emoji
+// resolve name -> id via get_custom_emojis and render as small inline images.
+async function loadCustomEmojis() {
+  try {
+    for (let page = 0; page < 25; page++) {
+      const batch = await invoke("get_custom_emojis", { page });
+      for (const e of batch || []) {
+        if (e && e.name && e.id) state.customEmojis[e.name] = e.id;
+      }
+      if (!batch || batch.length < 200) break;
+    }
+  } catch (e) {
+    console.warn("get_custom_emojis unavailable (custom emoji disabled). Is it in generate_handler!?", e);
+  }
+}
+
+const emojiImagePending = new Set();
+async function ensureEmojiImage(id) {
+  if (!id || state.emojiImages[id] || emojiImagePending.has(id)) return;
+  emojiImagePending.add(id);
+  try {
+    const dataUrl = await invoke("get_emoji_image", { emojiId: id });
+    if (dataUrl) {
+      state.emojiImages[id] = dataUrl;
+      for (const el of document.querySelectorAll(`img[data-emoji-id="${id}"]`)) el.src = dataUrl;
+    }
+  } catch (e) {
+    console.warn("get_emoji_image failed for", id, e);
+  } finally {
+    emojiImagePending.delete(id);
+  }
+}
+
+// DOM node for :name:, or null when the code is unknown (caller keeps the text).
+function emojiNode(name) {
+  if (EMOJI[name]) return document.createTextNode(EMOJI[name]);
+  const id = state.customEmojis[name];
+  if (id) {
+    const img = document.createElement("img");
+    img.className = "emoji";
+    img.alt = `:${name}:`;
+    img.title = `:${name}:`;
+    img.dataset.emojiId = id;
+    if (state.emojiImages[id]) img.src = state.emojiImages[id];
+    else ensureEmojiImage(id);
+    return img;
+  }
+  return null;
+}
+
 // ---------- markdown ----------
 // Minimal chat-flavored markdown, rendered by BUILDING DOM NODES — message
 // content never goes through innerHTML, so it can't inject markup. Supported:
@@ -627,7 +689,7 @@ function linkEl(href, label) {
 function inlineMd(target, text, depth = 0) {
   if (!text) return;
   if (depth > 2) { target.appendChild(document.createTextNode(text)); return; }
-  const re = /(`([^`]+)`)|(\*\*([^*]+)\*\*)|(~~([^~]+)~~)|(\*([^*\s][^*]*?)\*)|(\b_([^_\s][^_]*?)_\b)|(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>]+)/g;
+  const re = /(`([^`]+)`)|(\*\*([^*]+)\*\*)|(~~([^~]+)~~)|(\*([^*\s][^*]*?)\*)|(\b_([^_\s][^_]*?)_\b)|(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s<>]+)|(:([a-z0-9_+'-]+):)/g;
   let last = 0;
   let m;
   while ((m = re.exec(text))) {
@@ -663,6 +725,9 @@ function inlineMd(target, text, depth = 0) {
         re.lastIndex -= trail[0].length;
       }
       target.appendChild(linkEl(url, url));
+    } else if (m[15]) {
+      const node = emojiNode(m[16]);
+      target.appendChild(node || document.createTextNode(m[15])); // unknown code stays literal
     }
     last = re.lastIndex;
   }
@@ -954,12 +1019,114 @@ composer.addEventListener("submit", (e) => {
   sendCurrent();
 });
 composerInput.addEventListener("keydown", (e) => {
+  if (handleEmojiPopupKey(e)) return; // popup swallows Enter/arrows while open
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendCurrent();
   }
 });
 composerInput.addEventListener("input", autoResize);
+composerInput.addEventListener("input", updateEmojiPopup);
+composerInput.addEventListener("blur", () => setTimeout(hideEmojiPopup, 150)); // let clicks land first
+
+// ---------- emoji autocomplete ----------
+// Typing ":na" in the composer suggests matching emoji; Enter/Tab/click inserts.
+const emojiPopup = document.createElement("div");
+emojiPopup.className = "emoji-popup hidden";
+composer.appendChild(emojiPopup);
+let emojiCands = [];
+let emojiSel = 0;
+
+const EMOJI_PREFIX_RE = /(^|\s):([a-z0-9_+'-]{2,})$/;
+
+function emojiCandidates(prefix) {
+  const out = [];
+  for (const name of Object.keys(EMOJI)) {
+    if (name.startsWith(prefix)) out.push({ name, ch: EMOJI[name] });
+    if (out.length >= 8) return out;
+  }
+  for (const name of Object.keys(state.customEmojis)) {
+    if (name.startsWith(prefix)) out.push({ name, id: state.customEmojis[name] });
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
+function updateEmojiPopup() {
+  const upToCaret = composerInput.value.slice(0, composerInput.selectionStart);
+  const m = upToCaret.match(EMOJI_PREFIX_RE);
+  emojiCands = m ? emojiCandidates(m[2]) : [];
+  emojiSel = 0;
+  renderEmojiPopup();
+}
+
+function renderEmojiPopup() {
+  emojiPopup.innerHTML = "";
+  emojiPopup.classList.toggle("hidden", emojiCands.length === 0);
+  emojiCands.forEach((c, i) => {
+    const row = document.createElement("div");
+    row.className = "emoji-row" + (i === emojiSel ? " sel" : "");
+    const glyph = document.createElement("span");
+    glyph.className = "glyph";
+    if (c.ch) {
+      glyph.textContent = c.ch;
+    } else {
+      const img = document.createElement("img");
+      img.className = "emoji";
+      img.dataset.emojiId = c.id;
+      if (state.emojiImages[c.id]) img.src = state.emojiImages[c.id];
+      else ensureEmojiImage(c.id);
+      glyph.appendChild(img);
+    }
+    const label = document.createElement("span");
+    label.textContent = `:${c.name}:`;
+    row.appendChild(glyph);
+    row.appendChild(label);
+    row.addEventListener("mousedown", (e) => { e.preventDefault(); applyEmoji(c); });
+    emojiPopup.appendChild(row);
+  });
+}
+
+function hideEmojiPopup() {
+  emojiCands = [];
+  emojiPopup.classList.add("hidden");
+}
+
+// Returns true when the key was consumed by the popup.
+function handleEmojiPopupKey(e) {
+  if (!emojiCands.length) return false;
+  if (e.key === "ArrowDown") {
+    emojiSel = (emojiSel + 1) % emojiCands.length;
+  } else if (e.key === "ArrowUp") {
+    emojiSel = (emojiSel + emojiCands.length - 1) % emojiCands.length;
+  } else if (e.key === "Enter" || e.key === "Tab") {
+    applyEmoji(emojiCands[emojiSel]);
+  } else if (e.key === "Escape") {
+    hideEmojiPopup();
+  } else {
+    return false; // regular typing — let it through (input handler re-filters)
+  }
+  e.preventDefault();
+  renderEmojiPopup();
+  return true;
+}
+
+function applyEmoji(cand) {
+  const pos = composerInput.selectionStart;
+  const before = composerInput.value.slice(0, pos);
+  const after = composerInput.value.slice(pos);
+  const m = before.match(EMOJI_PREFIX_RE);
+  if (!m) { hideEmojiPopup(); return; }
+  const start = before.length - m[2].length - 1; // strip ":prefix"
+  // Unicode -> insert the character itself; custom -> keep the :name: code.
+  const insert = cand.ch ? cand.ch + " " : `:${cand.name}: `;
+  composerInput.value = before.slice(0, start) + insert + after;
+  const caret = start + insert.length;
+  composerInput.setSelectionRange(caret, caret);
+  hideEmojiPopup();
+  composerInput.focus();
+  autoResize();
+}
 
 // Scroll near the top of the message pane → pull in older history.
 messagesEl.addEventListener("scroll", () => {
