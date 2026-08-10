@@ -317,6 +317,11 @@ function searchText(ch) {
   return parts.filter(Boolean).join(" ").toLowerCase();
 }
 
+// A person-to-person conversation (1:1 or group), as opposed to a named channel.
+function isDM(ch) {
+  return ch.type === "D" || ch.type === "G";
+}
+
 function typeLabel(ch) {
   return { D: "Direct message", G: "Group", O: "Public channel", P: "Private channel" }[ch.type] || "Channel";
 }
@@ -863,6 +868,7 @@ const seenPostIds = new Set(); // dedupe guard (needs `id` on the WS payload)
 
 function onIncoming(event) {
   const p = event.payload; // { channel_id, sender, message, id? }
+  console.log("[mm-post]", p && p.channel_id, p && p.id, p && p.sender, p && p.file_ids);
   if (!p) return;
 
   // Same post delivered twice (duplicate WS connection, reconnect race) → drop.
@@ -892,11 +898,17 @@ function onIncoming(event) {
 
   // Notify for others' messages we'd otherwise miss: window unfocused, or the
   // message is in a conversation that isn't the one currently open.
-  if (!mine && (!document.hasFocus() || p.channel_id !== state.activeId)) {
-    const su = state.usersByName[senderClean];
-    const who = (su && realName(su)) || p.sender || "New message";
-    const title = ch && !isDM(ch) ? `${who} · ${displayName(ch)}` : who;
-    notify(title, p.message);
+  // Wrapped so a notification hiccup can never block rendering the message —
+  // an undefined helper here once silently ate all incoming messages.
+  try {
+    if (!mine && (!document.hasFocus() || p.channel_id !== state.activeId)) {
+      const su = state.usersByName[senderClean];
+      const who = (su && realName(su)) || p.sender || "New message";
+      const title = ch && !isDM(ch) ? `${who} · ${displayName(ch)}` : who;
+      notify(title, p.message);
+    }
+  } catch (e) {
+    console.error("notification failed (message still rendered)", e);
   }
 
   if (p.channel_id === state.activeId) {
