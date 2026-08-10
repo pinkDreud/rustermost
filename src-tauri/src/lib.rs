@@ -956,6 +956,13 @@ pub fn run() {
             channels: Mutex::new(Vec::new()),   // parte vuota
             ws_task:  Mutex::new(None),
         })
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             get_app_status, open_sso_window, 
             capture_session,
@@ -967,5 +974,14 @@ pub fn run() {
             get_file_info, get_file_thumbnail, get_file, upload_file,
             get_emoji_image, get_custom_emojis, add_reaction, remove_reaction, execute_command])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+        });
 }

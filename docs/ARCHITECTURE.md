@@ -18,15 +18,19 @@ All shared state lives in a single struct, registered once at startup with Tauri
 
 ```rust
 struct AppState {
-    session:  Mutex<Option<Session>>,   // set by capture_session
-    channels: Mutex<Vec<Channel>>,      // in-memory cache
+    session:  Mutex<Option<Session>>,                       // set by capture_session
+    channels: Mutex<Vec<Channel>>,                          // in-memory cache
+    ws_task:  Mutex<Option<tokio::task::JoinHandle<()>>>,   // the running WebSocket task
 }
 
 struct Session { base_url: String, token: String }
 ```
 
 - `session` is `None` until SSO capture succeeds. The helper `AppState::current_session()` locks the mutex and clones the `Session` out, or returns `AppError::NotLoggedIn` if the user hasn't authenticated yet. Every authenticated command starts by calling it, so "not logged in" is handled uniformly.
-- `channels` is an in-memory cache of the user's channels across all teams. It is populated by `fetch_all_channels` and read back instantly (no network) by `get_cached_channels`.
+- `channels` is an in-memory cache of the user's channels across all teams. It is populated by `fetch_all_channels` / `fetch_all_channels_with_members` and read back instantly (no network) by `get_cached_channels`.
+- `ws_task` holds the `JoinHandle` of the background WebSocket task. `connect_websocket` **aborts any previous task before spawning a new one**, making reconnection idempotent — without this, a frontend reload would leave a ghost connection behind and every message would be delivered (and rendered) twice.
+
+The guiding rule for what belongs in state: **cache things that stay true; return things that change.** Per-user read-state (`msg_count`, `mention_count`) changes on every read from any device, so it is fetched fresh and returned, never cached.
 
 ## Error handling
 
@@ -55,11 +59,28 @@ All commands are invoked from JavaScript via `invoke("<name>", { ...args })`. Ta
 | `fetch_grouped_channels` | `teamId` | Same fetch, but `partition`ed into `chat` (types `D`/`G`) and `community` (types `O`/`P`). |
 | `fetch_all_channels` | — | Aggregates channels across every team, de-duplicates by `id`, fills the cache, and returns the list. |
 | `get_cached_channels` | — | Returns the cached channel list instantly, with no network call. |
-| `connect_websocket` | — | Spawns the background task that maintains the real-time WebSocket connection. |
-| `send_message` | `channelId`, `message` | `POST /api/v4/posts`; publishes a message to a channel. |
-| `get_posts` | `channelId` | `GET /api/v4/channels/{id}/posts?per_page=100`; returns posts ordered oldest → newest. |
+| `fetch_channel_members` | `teamId` | Returns **my** ChannelMember records (read-state: `msg_count`, `mention_count`, `last_viewed_at`) for every channel in a team. |
+| `fetch_all_channels_with_members` | — | Channels across all teams, de-duplicated, each paired with my member record (`member` may be null). Powers the unread badges at startup. |
+| `view_channel` | `channelId` | `POST /channels/members/me/view`; marks a channel read on the server (clears badges on other devices too). |
+| `connect_websocket` | — | Spawns (replacing any previous instance) the background task that maintains the real-time WebSocket connection. |
+| `send_message` | `channelId`, `message`, `fileIds?` | `POST /api/v4/posts`; publishes a message, optionally with uploaded file attachments. |
+| `get_posts` | `channelId`, `before?` | `GET /api/v4/channels/{id}/posts?per_page=100[&before=<id>]`; one page of history, oldest → newest. The `before` cursor drives infinite scroll. |
+| `get_users_by_ids` | `ids` | `POST /api/v4/users/ids`; batch-resolves user ids to user objects (names for DMs and message authors). |
+| `search_users` | `term` | `POST /api/v4/users/search`; people search for the new-conversation modal. |
+| `get_avatar` | `userId` | Fetches a user's profile image and returns it as a base64 `data:` URL. |
+| `create_chat` | `userIds` | Creates a direct (2 ids) or group (3+) message channel. |
+| `create_named_channel` | `teamId`, `name`, `displayName`, `channelType` | Creates a public (`O`) or private (`P`) channel in a team. |
+| `get_file_info` | `fileId` | `GET /files/{id}/info`; name, size, and `mime_type` of an attachment. |
+| `get_file_thumbnail` | `fileId` | Attachment thumbnail as a `data:` URL (JPEG). |
+| `get_file` | `fileId`, `mime` | Full attachment as a `data:` URL; the mime comes from `get_file_info`. |
+| `upload_file` | `channelId`, `filename`, `dataB64` | `POST /api/v4/files` (raw body + query params); returns the new file's id, to be passed to `send_message`. |
+| `get_custom_emojis` | `page` | One page (200) of the server's custom emoji (`{id, name}`); the frontend pages until exhausted. |
+| `get_emoji_image` | `emojiId` | Custom emoji image as a `data:` URL; mime read from the `Content-Type` response header (PNG or GIF). |
+| `add_reaction` | `postId`, `emojiName`, `userId` | `POST /api/v4/reactions`; body is a serialized `Reaction`. |
+| `remove_reaction` | `postId`, `emojiName`, `userId` | `DELETE /users/{uid}/posts/{pid}/reactions/{name}`. |
+| `execute_command` | `channelId`, `teamId`, `command` | `POST /api/v4/commands/execute`; runs a slash command and returns the server's response (ephemeral `text` is rendered locally). |
 
-`get_posts` reverses Mattermost's ordering (the API returns newest-first) so the UI receives messages in chronological order.
+`get_posts` reverses Mattermost's ordering (the API returns newest-first) so the UI receives messages in chronological order. Binary assets (avatars, attachments, emoji) all follow one pattern: **fetched in Rust, base64-encoded, returned as `data:` URLs** — the webview never talks to the Mattermost server directly.
 
 ## Real-time pipeline
 
@@ -67,9 +88,11 @@ All commands are invoked from JavaScript via `invoke("<name>", { ...args })`. Ta
 
 1. It derives the WebSocket URL by rewriting the base URL's scheme (`https://` → `wss://`) and appending `/api/v4/websocket`, then connects with `tokio_tungstenite`.
 2. It sends an `authentication_challenge` action carrying the session token, then enters a read loop over incoming frames.
-3. It filters to frames where `event == "posted"`. Mattermost nests the post as a **JSON-encoded string** inside `data.post`, so the handler performs a **double parse**: first the envelope, then the `post` string. It builds a clean `IncomingMessage { channel_id, sender, message }` (sender taken from `data.sender_name`) and emits it to the frontend via `app.emit("mm-post", msg)`.
+3. It filters incoming frames by event type. Mattermost nests payloads as **JSON-encoded strings** inside the envelope (`data.post`, `data.reaction`), so handlers perform a **double parse**: first the envelope, then the inner string.
+   - `posted` → emitted as `mm-post` with `IncomingMessage { id, file_ids, channel_id, sender, message }`. The post `id` powers the frontend's duplicate-delivery guard; `file_ids` lets attachments render live.
+   - `reaction_added` / `reaction_removed` → emitted as `mm-reaction-added` / `mm-reaction-removed` with a `Reaction { user_id, post_id, emoji_name }`, keeping reaction pills in sync across clients.
 
-The frontend subscribes with `window.__TAURI__.event.listen("mm-post", cb)`. This closes an elegant loop: a message you publish through `send_message` is echoed back to you by the server over this same WebSocket, so sent and received messages flow through one unified path into the UI.
+The frontend subscribes with `window.__TAURI__.event.listen(...)`. This closes an elegant loop: a message you publish through `send_message` is echoed back to you by the server over this same WebSocket, so sent and received messages flow through one unified path into the UI. The frontend also listens for `mm-viewed` and `mm-emoji-added` — currently dormant hooks that light up if the WS loop is ever extended to forward `channel_viewed` / `emoji_added` events.
 
 ## REST endpoints used
 
@@ -78,8 +101,18 @@ All endpoints are called against the session's `base_url` and authenticated with
 - `GET /api/v4/users/me` — current user
 - `GET /api/v4/users/me/teams` — the user's teams
 - `GET /api/v4/users/me/teams/{team_id}/channels` — channels for a team
-- `GET /api/v4/channels/{channel_id}/posts?per_page=100` — channel history
-- `POST /api/v4/posts` — publish a message
+- `GET /api/v4/users/me/teams/{team_id}/channels/members` — my read-state per channel
+- `POST /api/v4/channels/members/me/view` — mark a channel viewed
+- `GET /api/v4/channels/{channel_id}/posts?per_page=100[&before=<post_id>]` — channel history (paged)
+- `POST /api/v4/posts` — publish a message (optionally with `file_ids`)
+- `POST /api/v4/users/ids` / `POST /api/v4/users/search` — user resolution & search
+- `GET /api/v4/users/{user_id}/image` — avatar
+- `POST /api/v4/channels/direct|group` / `POST /api/v4/channels` — create conversations
+- `POST /api/v4/files?channel_id&filename` — upload an attachment (raw body)
+- `GET /api/v4/files/{id}` / `/info` / `/thumbnail` — attachment content & metadata
+- `GET /api/v4/emoji` / `GET /api/v4/emoji/{id}/image` — custom emoji list & images
+- `POST /api/v4/reactions` / `DELETE /api/v4/users/{uid}/posts/{pid}/reactions/{name}` — reactions
+- `POST /api/v4/commands/execute` — slash commands
 - `wss://<host>/api/v4/websocket` — real-time event stream (authenticated via `authentication_challenge`)
 
 ## A note on the `Channel` type

@@ -22,6 +22,12 @@ rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed 
 - **Message history** with infinite scroll — older messages load as you scroll back up.
 - **Start new conversations** from inside the app: a direct message or group message by picking people, or a named public/private channel in a team.
 - **Team labels** on Community channels, so same-named channels across teams are easy to tell apart.
+- **Unread tracking synced with the server** — badges are seeded from Mattermost's read-state at startup, a pinned **Unread** section sits on top of the sidebar, and opening a conversation reports the read back so your other devices clear their badges too.
+- **File & image attachments, both directions** — send via the 📎 button, drag & drop, or pasting a screenshot; received images render as thumbnails with a click-to-zoom lightbox, other files as named chips.
+- **Markdown rendering** — links (opened in the system browser), bold/italic/strikethrough, inline code and fenced code blocks, quotes, and lists — built as DOM nodes, never injected HTML.
+- **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), and the server's custom emoji rendered inline.
+- **Reactions** — react to any message from a searchable emoji picker; counts update live across clients and devices.
+- **Slash commands** — `/away`, `/shrug`, custom integrations — executed for real, with ephemeral replies rendered in-chat as "only visible to you" bubbles.
 
 ## Quick start (developers)
 
@@ -63,6 +69,10 @@ This produces, under `src-tauri/target/release/`:
 Testers just need the URL of a Mattermost server they can reach and their SSO credentials; on first launch they enter the URL, click **Connect**, and log in through SSO exactly as in dev.
 
 > The build is **unsigned**, so Windows SmartScreen will show a "Windows protected your PC" warning the first time — that's expected for an in-house tool. Testers click **More info → Run anyway**. Signing the binary (a code-signing certificate) removes the warning but isn't set up here.
+
+## Tests
+
+There are **no tests yet**. This repository began as a Rust-learning project, and the priority so far has been building features while learning the language — a deliberate trade-off, not an oversight. **Tests are the next step**: the plan is to extract the pure logic (channel grouping and de-duplication, unread computation, markdown parsing, emoji resolution) into functions testable on both the Rust and JavaScript sides.
 
 ## Documentation
 
