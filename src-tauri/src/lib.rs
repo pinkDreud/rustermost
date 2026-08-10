@@ -1,5 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-use tauri::Manager;
+use tauri::{Manager, utils::mime_type};
 use std::sync::Mutex;
 
 #[derive(Clone)]
@@ -76,6 +76,16 @@ struct Post {
     message: String,
     user_id: String,
     create_at: i64,
+    #[serde(default)]
+    file_ids: Vec<String>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+struct FileInfo {
+    id: String, 
+    name: String, 
+    size: i64, 
+    mime_type: String
 }
 
 #[derive(serde::Deserialize)]
@@ -105,6 +115,8 @@ struct MMUser {
 
 #[derive(serde::Serialize, Clone)]
 struct IncomingMessage {
+    id: String,
+    file_ids: Vec<String>,
     channel_id: String,
     sender: String,
     message: String,
@@ -177,6 +189,76 @@ async fn capture_session(
 
     Ok(token)
 }
+
+
+#[tauri::command]
+async fn get_file_info(
+    file_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/files/{}/info", session.base_url, file_id);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .bearer_auth(session.token)
+        .send()
+        .await?;
+
+    let body = resp.json::<serde_json::Value>().await?;
+
+    Ok(body)
+}
+
+#[tauri::command]
+async fn get_file_thumbnail(
+    file_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/files/{}/thumbnail", session.base_url, file_id);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .bearer_auth(session.token)
+        .send()
+        .await?;
+
+    let bytes = resp.bytes().await?;
+
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:image/jpeg;base64,{}", b64))
+}
+
+#[tauri::command]
+async fn get_file(
+    file_id: String,
+    mime: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, AppError> {
+    let session = state.current_session()?;
+
+    let url = format!("{}/api/v4/files/{}", session.base_url, file_id);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(url)
+        .bearer_auth(session.token)
+        .send()
+        .await?;
+
+    let bytes = resp.bytes().await?;
+
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
 
 #[tauri::command]
 async fn fetch_me(
@@ -440,6 +522,10 @@ async fn connect_websocket(
                                         channel_id: post["channel_id"].as_str().unwrap_or("").to_string(),
                                         sender:     json["data"]["sender_name"].as_str().unwrap_or("").to_string(),
                                         message:    post["message"].as_str().unwrap_or("").to_string(),
+                                        id: post["id"].as_str().unwrap_or("").to_string(),
+                                        file_ids: post["file_ids"].as_array()
+                                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                            .unwrap_or_default(),
                                     };
                                     let _ = app.emit("mm-post", msg);
                                 }
@@ -557,7 +643,7 @@ async fn get_avatar(
         .send()
         .await?;
 
-      let bytes = resp.bytes().await?;
+    let bytes = resp.bytes().await?;
 
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -679,7 +765,8 @@ pub fn run() {
             fetch_channels, fetch_grouped_channels,
             fetch_all_channels, get_cached_channels,
             connect_websocket, send_message, get_posts, get_users_by_ids, get_avatar, search_users, create_chat, create_named_channel,
-            fetch_channel_members, fetch_all_channels_with_members, view_channel])
+            fetch_channel_members, fetch_all_channels_with_members, view_channel,
+            get_file_info, get_file_thumbnail, get_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

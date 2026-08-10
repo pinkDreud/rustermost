@@ -383,3 +383,54 @@ select.modal-input { appearance: none; cursor: pointer; }
 }
 .modal-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .modal-primary:disabled { opacity: 0.5; cursor: default; }
+
+/* ---------- attachments ---------- */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.attachment {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.attachment.image {
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  line-height: 0;
+}
+.attachment.image img {
+  max-width: 260px;
+  max-height: 260px;
+  display: block;
+  border-radius: 8px;
+}
+.attachment.file-chip {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--text);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  cursor: zoom-out;
+}
+.lightbox img {
+  max-width: 92%;
+  max-height: 92%;
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+}

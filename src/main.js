@@ -22,6 +22,9 @@
 //      Falls back to fetch_all_channels and session-local badges.
 //   4. "mm-viewed" event — once the WS loop forwards channel_viewed, channels
 //      read on my other devices clear their badge here live.
+//   5. get_file_info / get_file_thumbnail / get_file commands — attachments on
+//      posts (Post.file_ids) render as inline images (click = full view) or
+//      file chips. Until then attachments show as a plain "📎 attachment" tag.
 
 const invoke = window.__TAURI__.core.invoke;
 const listen = window.__TAURI__.event.listen;
@@ -39,6 +42,8 @@ const state = {
   activity: {}, // channelId -> last-activity ms (learned live; complements last_post_at)
   userLookupEnabled: true, // flips off if get_users_by_ids isn't in the backend yet
   canViewChannel: true, // flips off if view_channel isn't in the backend yet
+  fileInfos: {}, // file_id -> { name, size, mime_type, ... }
+  fileLookupEnabled: true, // flips off if the file commands aren't in the backend yet
   collapsed: {}, // section title -> true when folded
   avatars: {}, // user_id -> data URL (in-memory; the disk cache comes later)
   avatarPending: new Set(), // user_ids currently being fetched
@@ -495,7 +500,7 @@ async function loadOlder() {
     for (const p of older) {
       const mine = state.me && p.user_id === state.me.id;
       const sender = mine ? null : realName(state.users[p.user_id]);
-      frag.appendChild(bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at }));
+      frag.appendChild(bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at, files: p.file_ids }));
     }
     messagesEl.insertBefore(frag, messagesEl.firstChild);
     messagesEl.scrollTop += messagesEl.scrollHeight - prevH; // keep the view steady
@@ -524,7 +529,7 @@ function renderMessages(posts) {
     const mine = state.me && p.user_id === state.me.id;
     const sender = mine ? null : realName(state.users[p.user_id]); // named once resolvable
     messagesEl.appendChild(
-      bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at })
+      bubbleEl({ mine, uid: p.user_id, sender, text: p.message, ts: p.create_at, files: p.file_ids })
     );
   }
   scrollToBottom();
@@ -582,7 +587,89 @@ async function ensureAvatar(uid) {
   }
 }
 
-function bubbleEl({ mine, uid, sender, text, ts }) {
+// ---------- attachments ----------
+async function fileInfo(id) {
+  if (state.fileInfos[id]) return state.fileInfos[id];
+  const info = await invoke("get_file_info", { fileId: id });
+  state.fileInfos[id] = info;
+  return info;
+}
+
+function formatSize(bytes) {
+  if (typeof bytes !== "number" || bytes < 0) return "";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function attachmentsEl(fileIds) {
+  const wrap = document.createElement("div");
+  wrap.className = "attachments";
+  for (const id of fileIds) {
+    const el = document.createElement("div");
+    el.className = "attachment";
+    el.textContent = "📎 …";
+    wrap.appendChild(el);
+    hydrateAttachment(el, id);
+  }
+  return wrap;
+}
+
+// Fill an attachment placeholder: image thumbnail (click = full view) or a
+// name+size chip. Degrades to a plain tag until the file commands exist.
+async function hydrateAttachment(el, id) {
+  if (!state.fileLookupEnabled) { el.textContent = "📎 attachment"; return; }
+  let info;
+  try {
+    info = await fileInfo(id);
+  } catch (e) {
+    state.fileLookupEnabled = false; // commands not registered yet
+    console.warn("get_file_info unavailable (attachments shown as tags). Is it in generate_handler!?", e);
+    el.textContent = "📎 attachment";
+    return;
+  }
+  const isImage = (info.mime_type || "").startsWith("image/");
+  if (!isImage) {
+    el.classList.add("file-chip");
+    el.textContent = `📎 ${info.name}` + (info.size ? ` · ${formatSize(info.size)}` : "");
+    return;
+  }
+  try {
+    const thumb = await invoke("get_file_thumbnail", { fileId: id });
+    el.classList.add("image");
+    el.textContent = "";
+    const img = document.createElement("img");
+    img.src = thumb;
+    img.alt = info.name;
+    el.appendChild(img);
+    el.addEventListener("click", () => openLightbox(id, info));
+  } catch (_) {
+    // thumbnail failed (e.g. command missing) — at least name the file
+    el.classList.add("file-chip");
+    el.textContent = `🖼️ ${info.name}`;
+  }
+}
+
+// Full-size image over everything; click anywhere or Esc to close.
+async function openLightbox(id, info) {
+  const overlay = document.createElement("div");
+  overlay.className = "lightbox";
+  const img = document.createElement("img");
+  img.alt = info.name;
+  overlay.appendChild(img);
+  const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  overlay.addEventListener("click", close);
+  document.addEventListener("keydown", onKey);
+  document.body.appendChild(overlay);
+  try {
+    img.src = await invoke("get_file", { fileId: id, mime: info.mime_type });
+  } catch (_) {
+    close(); // full-size fetch not available — the thumbnail stays in the bubble
+  }
+}
+
+function bubbleEl({ mine, uid, sender, text, ts, files }) {
   const row = document.createElement("div");
   row.className = "msg-row" + (mine ? " mine" : "");
   row.appendChild(avatarEl(uid, mine ? state.me?.username : sender));
@@ -596,10 +683,13 @@ function bubbleEl({ mine, uid, sender, text, ts }) {
     meta.textContent = (sender ? sender + " · " : "") + formatTime(ts);
     el.appendChild(meta);
   }
-  const body = document.createElement("div");
-  body.className = "msg-body";
-  body.textContent = text; // textContent — never inject message HTML
-  el.appendChild(body);
+  if (text) {
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.textContent = text; // textContent — never inject message HTML
+    el.appendChild(body);
+  }
+  if (files && files.length) el.appendChild(attachmentsEl(files));
 
   row.appendChild(el);
   return row;
@@ -679,7 +769,7 @@ function onIncoming(event) {
     // live events carry the username but not the user_id — resolve it if we can
     const uid = mine ? state.me?.id : state.usersByName[senderClean]?.id;
     messagesEl.appendChild(
-      bubbleEl({ mine, uid, sender: mine ? null : p.sender, text: p.message, ts: Date.now() })
+      bubbleEl({ mine, uid, sender: mine ? null : p.sender, text: p.message, ts: Date.now(), files: p.file_ids })
     );
     scrollToBottom();
     if (document.hasFocus()) {
