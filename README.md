@@ -82,5 +82,3 @@ There are **no tests yet**. This repository began as a Rust-learning project, an
 ## License
 
 Released under the **MIT License** — see [`LICENSE`](LICENSE). You are free to use, modify, and distribute this software, including commercially, provided the copyright notice is retained.
-
-Copyright © 2026 Matteo Magherini
