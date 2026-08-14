@@ -1,21 +1,21 @@
 # Development & roadmap
 
-This is a **learning project**. The code deliberately favors clarity and directness over production hardening: there is no retry/backoff, error surfacing to the user is still minimal, and several rough edges remain. It's meant to be read, run, and extended by engineers, not deployed as-is.
+This is a **learning project**: the Rust backend is hand-written by the author while learning the language; the JavaScript frontend is written by Claude (see the README's "How this was built"). The code deliberately favors clarity and directness over production hardening: error surfacing to the user is still minimal, retry logic is basic (the WebSocket reconnects on a fixed 5 s delay; REST calls don't retry), and several rough edges remain. It's meant to be read, run, and extended by engineers, not deployed as-is.
 
 ## Prerequisites (all platforms)
 
-The primary and tested platform is **Windows** (see the [README](../README.md) for the quick setup). Notes:
+Full step-by-step installation instructions for **Windows, macOS, and Linux (Ubuntu)** live in the [README](../README.md#installation). Extra notes:
 
-- **Windows** — if the C++ Build Tools are missing, the build fails with `error: linker `link.exe` not found`; installing the *Desktop development with C++* workload resolves it.
-- **macOS (tested)** — install the Xcode Command Line Tools (`xcode-select --install`). Development on an Apple Silicon Mac works; see the macOS notes under "Known gotchas".
-- **Linux (untested)** — install `webkit2gtk` (4.1), `librsvg2`, and a C toolchain such as `build-essential` plus `libssl-dev` (package names vary by distribution).
+- **Windows** — if the C++ Build Tools are missing, the build fails with ``error: linker `link.exe` not found``; installing the *Desktop development with C++* workload resolves it.
+- **macOS (tested)** — development on an Apple Silicon Mac works; see the macOS notes under "Known gotchas".
+- **Linux (untested)** — the README lists the Ubuntu/Debian package set; names vary on other distributions (Tauri's [Linux guide](https://tauri.app/start/prerequisites/#linux) has per-distro equivalents).
 
 ## Development notes
 
 - **The session token lives in memory only.** After SSO login the captured token is held in the Rust backend's state and is **never written to disk**. Practical consequence: any change to the Rust backend triggers `cargo tauri dev` to recompile and restart the app, which wipes the in-memory token — **you have to log in again**. Editing only the frontend (JS/HTML/CSS) hot-reloads and keeps the session alive, so front-end iteration is fast.
-- **Two separate log streams.** Rust `println!` / `eprintln!` output goes to the **terminal** running `cargo tauri dev`; JavaScript `console.log` goes to the in-app **DevTools console (F12)**. WebSocket connection state, errors, and the raw event loop are logged from Rust (terminal), while parsed messages are emitted to the frontend. When something goes wrong, check *both* places.
+- **Two separate log streams.** Rust `println!` / `eprintln!` output goes to the **terminal** running `cargo tauri dev`; JavaScript `console.log` goes to the in-app **DevTools console (F12)**. When something goes wrong, check *both* places. Rust-side logging is currently minimal: a single `eprintln!` when the WebSocket connection ends in an error (`ws.rs`). The `mattermost_api` crate logs internally via the `log` crate, but no logger is initialized, so those entries are dropped — wiring up `env_logger` (or `tauri-plugin-log`) would surface them.
 - **serde field renaming is bidirectional.** `Channel.channel_type` is annotated with `#[serde(rename = "type")]`. That rename applies in both directions, so on the **JavaScript side the field is `type`**, not `channel_type` (e.g. `channel.type === "D"`). Keep this in mind whenever you touch a struct with renamed fields.
-- **TLS uses the `native-tls` backend.** The WebSocket relies on OS-provided TLS (Schannel on Windows), which matches reqwest's default and avoids any extra configuration. *Historical note:* an earlier attempt with rustls failed on Windows because rustls requires an explicit crypto provider to be installed — `native-tls` sidesteps that entirely.
+- **TLS uses the `native-tls` backend** (OS-provided: Schannel on Windows, Secure Transport on macOS, OpenSSL on Linux), now supplied through the `mattermost_api` crate's stack — `reqwest` for REST and `async-tungstenite` for the WebSocket — plus our own direct `reqwest` for media downloads. No rustls TLS backend is enabled (rustls appears in `Cargo.lock` only as an unactivated optional dependency of reqwest). *Historical note:* an earlier attempt with rustls failed on Windows because rustls requires an explicit crypto provider to be installed — `native-tls` sidesteps that entirely.
 - **The frontend degrades gracefully around missing backend commands.** New features are built frontend-first: the JS probes a command once, and if it isn't registered yet it logs a `console.warn` naming the command and falls back (badges go session-local, attachments render as plain tags, slash commands send as text). This lets the two halves land independently.
 - **`dragDropEnabled: false`** is set on the window in `tauri.conf.json` — deliberately. Tauri's native drag-drop interception would otherwise swallow the HTML5 drop events the frontend uses to attach dropped files.
 - **A `#[tauri::command]` can be invoked again at any time.** Any command with a side effect like "start a background task" must decide what a second call means. `connect_websocket` answers by aborting the previous task (handle kept in `AppState.ws_task`) — the fix for a duplicate-message bug where every frontend reload leaked a second WebSocket.
@@ -34,7 +34,7 @@ The primary and tested platform is **Windows** (see the [README](../README.md) f
 - SSO login via cookie capture.
 - Full WhatsApp-style UI: sidebar with sections, search by channel *and* person name, message pane, composer, new-conversation modal, avatars.
 - Cross-team channel aggregation, with de-duplication and in-memory caching; DM names resolved via batch user lookup.
-- Real-time send + receive over WebSocket, with duplicate-delivery protection (post-id dedupe, and the WS task is aborted/replaced on reconnect).
+- Real-time send + receive over WebSocket via the `mattermost_api` crate, with **auto-reconnection** (5 s retry loop + keep-alive pings) and duplicate-delivery protection (post-id dedupe, and the WS task is aborted/replaced when `connect_websocket` is re-invoked).
 - **Unread tracking synced with the server**: badges seeded from `total_msg_count − member.msg_count` at startup, pinned Unread section, reads reported back via `view_channel`.
 - Infinite-scroll history (`before` cursor pagination).
 - **Attachments both ways**: upload via button / drag & drop / paste, download with thumbnails, lightbox, and file chips.
@@ -47,7 +47,7 @@ The primary and tested platform is **Windows** (see the [README](../README.md) f
 ## Roadmap / TODO
 
 - **Tests — the next step.** The project has none; it was a Rust-learning exercise and features came first. Plan: extract pure logic (channel grouping/dedup, unread computation, markdown/emoji parsing) into unit-testable functions on both sides.
-- **WebSocket auto-reconnection.** The abort/replace machinery (`ws_task`) is the foundation; what's missing is a retry loop when the connection drops. Until then, a dead socket means no live updates until restart.
+- **Smarter WebSocket backoff.** Auto-reconnection works (fixed 5 s retry); the refinement is exponential backoff with jitter so a long outage doesn't hammer the server at a steady beat.
 - **Forward `channel_viewed` (and optionally `emoji_added`, `ephemeral_message`) over the WS bridge** — the frontend listeners (`mm-viewed`, `mm-emoji-added`) already exist, dormant.
 - **Persist the token securely** (OS keychain) so a restart doesn't require a new SSO login.
 - **Migrate remaining `String`-typed command errors** to the unified `AppError` type.

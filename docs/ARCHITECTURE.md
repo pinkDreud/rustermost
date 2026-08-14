@@ -1,6 +1,22 @@
 # Architecture
 
-`rustermost` is a [Tauri v2](https://tauri.app/) desktop application. The **frontend** (plain HTML + vanilla JavaScript in `src/`) renders the UI and calls into the **Rust backend** (`src-tauri/src/lib.rs`) through Tauri's `invoke` bridge. The backend owns all network I/O — REST calls to the Mattermost server and a persistent WebSocket — and holds the authenticated session in shared, mutex-guarded state. The frontend never sees the Mattermost credentials directly beyond the moment they are captured; all authenticated work happens in Rust.
+`rustermost` is a [Tauri v2](https://tauri.app/) desktop application. The **frontend** (plain HTML + vanilla JavaScript in `src/`) renders the UI and calls into the **Rust backend** (`src-tauri/src/`) through Tauri's `invoke` bridge. The backend owns all network I/O — REST calls to the Mattermost server and a persistent WebSocket — and holds the authenticated session in shared, mutex-guarded state. The frontend never sees the Mattermost credentials directly beyond the moment they are captured; all authenticated work happens in Rust.
+
+JSON API traffic (REST and WebSocket) goes through the [`mattermost_api`](https://docs.rs/mattermost_api) crate; binary endpoints (avatars, attachments, emoji images) are called directly with `reqwest`, because the crate only deserializes JSON responses.
+
+## Module layout
+
+The backend is split into focused modules under `src-tauri/src/`:
+
+| Module | Contents |
+| --- | --- |
+| `lib.rs` | Module declarations, `AppState` registration, plugin setup, `generate_handler!` wiring, `run()` with the macOS hide-on-close / reopen handlers |
+| `error.rs` | `AppError` and its `Display` / `From` / `Serialize` impls |
+| `models.rs` | The serde data structs (`Team`, `Channel`, `Post`, `Reaction`, …) |
+| `session.rs` | `Session`, `AppState`, and the `current_session` / `current_client` accessors |
+| `api.rs` | The JSON commands (fetching, messaging, reactions, search, creation) + SSO login |
+| `media.rs` | The raw-`reqwest` byte endpoints (files, thumbnails, avatars, emoji images, upload) plus the emoji-list command that accompanies them |
+| `ws.rs` | The WebSocket handler and the auto-reconnecting connection task |
 
 ## Authentication flow
 
@@ -8,25 +24,27 @@ Authentication is delegated entirely to the Mattermost server's own SSO, so `rus
 
 1. The user enters their server URL and submits the form. The frontend calls `open_sso_window(url)`, which opens a dedicated Tauri `WebviewWindow` (label `"sso-login"`, 500×700) pointed at the Mattermost server. The user completes the login inside that webview, exactly as they would in a browser.
 2. Meanwhile the frontend polls: every 2 seconds it calls `capture_session(baseUrl)`. On the backend, `capture_session` looks up the `"sso-login"` webview, reads its cookies for the given URL via `cookies_for_url`, and searches for the `MMAUTHTOKEN` cookie. Until the user has finished logging in, no such cookie exists and the command rejects; the frontend swallows that rejection and retries on the next tick.
-3. Once the cookie appears, `capture_session` extracts its value and stores a `Session { base_url, token }` in the shared backend state, then returns the token to JavaScript (which stops the polling loop).
+3. Once the cookie appears, `capture_session` extracts its value, stores a `Session { base_url, token }` in the shared backend state, **and constructs a `mattermost_api` client** (`Mattermost::new` with `AuthenticationData::from_access_token`) stored alongside it, then returns the token to JavaScript (which stops the polling loop).
 
-From that point on, the captured `MMAUTHTOKEN` is used as a **Bearer token** on every REST request (`Authorization: Bearer <MMAUTHTOKEN>`) and as the credential in the WebSocket `authentication_challenge`. Because the token lives in backend state, individual commands don't take it as an argument — they read it from the session.
+From that point on, the captured `MMAUTHTOKEN` is used as a **Bearer token** on every request — the `mattermost_api` client sends it on JSON calls and in the WebSocket `authentication_challenge` automatically, and the raw-`reqwest` media commands attach it explicitly from `Session`. Because the credentials live in backend state, individual commands don't take them as arguments.
 
 ## Backend state
 
 All shared state lives in a single struct, registered once at startup with Tauri's `.manage(...)` and injected into commands as `tauri::State<'_, AppState>`:
 
 ```rust
-struct AppState {
-    session:  Mutex<Option<Session>>,                       // set by capture_session
-    channels: Mutex<Vec<Channel>>,                          // in-memory cache
-    ws_task:  Mutex<Option<tokio::task::JoinHandle<()>>>,   // the running WebSocket task
+pub struct AppState {
+    pub session:   Mutex<Option<Session>>,                       // raw credentials, set by capture_session
+    pub session_m: Mutex<Option<Mattermost>>,                    // mattermost_api client, set by capture_session
+    pub channels:  Mutex<Vec<Channel>>,                          // in-memory cache
+    pub ws_task:   Mutex<Option<tokio::task::JoinHandle<()>>>,   // the running WebSocket task
 }
 
-struct Session { base_url: String, token: String }
+#[derive(Clone)]
+pub struct Session { pub base_url: String, pub token: String }
 ```
 
-- `session` is `None` until SSO capture succeeds. The helper `AppState::current_session()` locks the mutex and clones the `Session` out, or returns `AppError::NotLoggedIn` if the user hasn't authenticated yet. Every authenticated command starts by calling it, so "not logged in" is handled uniformly.
+- `session` and `session_m` are `None` until SSO capture succeeds. Two accessors mirror the two network paths: `current_client()` clones out the `Mattermost` client (JSON commands), `current_session()` clones out the raw `Session` (media commands). Both return `AppError::NotLoggedIn` before authentication, so "not logged in" is handled uniformly. Cloning out of the guard (rather than holding it) keeps the `std::sync::Mutex` lock from ever spanning an `.await`.
 - `channels` is an in-memory cache of the user's channels across all teams. It is populated by `fetch_all_channels` / `fetch_all_channels_with_members` and read back instantly (no network) by `get_cached_channels`.
 - `ws_task` holds the `JoinHandle` of the background WebSocket task. `connect_websocket` **aborts any previous task before spawning a new one**, making reconnection idempotent — without this, a frontend reload would leave a ghost connection behind and every message would be delivered (and rendered) twice.
 
@@ -40,7 +58,7 @@ Commands that touch the network return `Result<_, AppError>`. `AppError` is a sm
 enum AppError { Network(String), Tauri(String), NotLoggedIn }
 ```
 
-It implements `Display` (human-readable messages), `From<reqwest::Error>` and `From<tauri::Error>` (so the `?` operator converts underlying failures automatically), and a custom `Serialize` that serializes the error to its `Display` string. Because Tauri serializes a command's `Err` value across the bridge, any `AppError` surfaces in JavaScript as a **rejected promise** carrying that string — catchable with ordinary `try/catch` (or `.catch`). This is exactly how the frontend's SSO polling loop distinguishes "token not ready yet" from success.
+It implements `Display` (human-readable messages), `From<reqwest::Error>`, `From<tauri::Error>`, and `From<mattermost_api::errors::ApiError>` (so the `?` operator converts underlying failures automatically), and a custom `Serialize` that serializes the error to its `Display` string. Because Tauri serializes a command's `Err` value across the bridge, any `AppError` surfaces in JavaScript as a **rejected promise** carrying that string — catchable with ordinary `try/catch` (or `.catch`). This is exactly how the frontend's SSO polling loop distinguishes "token not ready yet" from success.
 
 Note that the two SSO-facing commands (`open_sso_window`, `capture_session`) instead return `Result<_, String>`, since they run before a session exists and report low-level errors (URL parse, missing webview, cookie not found) directly as strings.
 
@@ -64,7 +82,7 @@ All commands are invoked from JavaScript via `invoke("<name>", { ...args })`. Ta
 | `view_channel` | `channelId` | `POST /channels/members/me/view`; marks a channel read on the server (clears badges on other devices too). |
 | `connect_websocket` | — | Spawns (replacing any previous instance) the background task that maintains the real-time WebSocket connection. |
 | `send_message` | `channelId`, `message`, `fileIds?` | `POST /api/v4/posts`; publishes a message, optionally with uploaded file attachments. |
-| `get_posts` | `channelId`, `before?` | `GET /api/v4/channels/{id}/posts?per_page=100[&before=<id>]`; one page of history, oldest → newest. The `before` cursor drives infinite scroll. |
+| `get_posts` | `channelId`, `before?` | `GET /api/v4/channels/{id}/posts?per_page=30[&before=<id>]`; one page of history, oldest → newest. The `before` cursor drives infinite scroll (page size mirrored by `PAGE_SIZE` in `main.js`). |
 | `get_users_by_ids` | `ids` | `POST /api/v4/users/ids`; batch-resolves user ids to user objects (names for DMs and message authors). |
 | `search_users` | `term` | `POST /api/v4/users/search`; people search for the new-conversation modal. |
 | `get_avatar` | `userId` | Fetches a user's profile image and returns it as a base64 `data:` URL. |
@@ -74,23 +92,22 @@ All commands are invoked from JavaScript via `invoke("<name>", { ...args })`. Ta
 | `get_file_thumbnail` | `fileId` | Attachment thumbnail as a `data:` URL (JPEG). |
 | `get_file` | `fileId`, `mime` | Full attachment as a `data:` URL; the mime comes from `get_file_info`. |
 | `upload_file` | `channelId`, `filename`, `dataB64` | `POST /api/v4/files` (raw body + query params); returns the new file's id, to be passed to `send_message`. |
-| `get_custom_emojis` | `page` | One page (200) of the server's custom emoji (`{id, name}`); the frontend pages until exhausted. |
+| `get_custom_emojis` | `page` | One page (200) of the server's custom emoji (`{id, name}`); the frontend pages until exhausted or a 25-page cap (5 000 emoji). |
 | `get_emoji_image` | `emojiId` | Custom emoji image as a `data:` URL; mime read from the `Content-Type` response header (PNG or GIF). |
 | `add_reaction` | `postId`, `emojiName`, `userId` | `POST /api/v4/reactions`; body is a serialized `Reaction`. |
 | `remove_reaction` | `postId`, `emojiName`, `userId` | `DELETE /users/{uid}/posts/{pid}/reactions/{name}`. |
 | `execute_command` | `channelId`, `teamId`, `command` | `POST /api/v4/commands/execute`; runs a slash command and returns the server's response (ephemeral `text` is rendered locally). |
 
-`get_posts` reverses Mattermost's ordering (the API returns newest-first) so the UI receives messages in chronological order. Binary assets (avatars, attachments, emoji) all follow one pattern: **fetched in Rust, base64-encoded, returned as `data:` URLs** — the webview never talks to the Mattermost server directly.
+`get_posts` reverses Mattermost's ordering (the API returns newest-first) so the UI receives messages in chronological order. JSON commands call the `mattermost_api` client's `query`/`post` methods with **relative** endpoints (the client prefixes `/api/v4/` itself). Binary assets (avatars, attachments, emoji) all follow one pattern: **fetched in Rust with raw `reqwest`, base64-encoded, returned as `data:` URLs** — the webview never talks to the Mattermost server directly.
 
 ## Real-time pipeline
 
-`connect_websocket` spawns a detached `tokio` task and returns immediately, so the UI is never blocked by the long-lived connection. Inside the task:
+`connect_websocket` spawns a detached `tokio` task and returns immediately, so the UI is never blocked by the long-lived connection. The connection itself is the `mattermost_api` crate's: `Mattermost::connect_to_websocket` derives the `wss://` URL, connects, sends the `authentication_challenge`, and drives the read loop — delivering each event, pre-parsed into a typed `WebsocketEvent`, to our `WsHandler` (an implementation of the crate's `WebsocketHandler` trait, private to `ws.rs`).
 
-1. It derives the WebSocket URL by rewriting the base URL's scheme (`https://` → `wss://`) and appending `/api/v4/websocket`, then connects with `tokio_tungstenite`.
-2. It sends an `authentication_challenge` action carrying the session token, then enters a read loop over incoming frames.
-3. It filters incoming frames by event type. Mattermost nests payloads as **JSON-encoded strings** inside the envelope (`data.post`, `data.reaction`), so handlers perform a **double parse**: first the envelope, then the inner string.
-   - `posted` → emitted as `mm-post` with `IncomingMessage { id, file_ids, channel_id, sender, message }`. The post `id` powers the frontend's duplicate-delivery guard; `file_ids` lets attachments render live.
-   - `reaction_added` / `reaction_removed` → emitted as `mm-reaction-added` / `mm-reaction-removed` with a `Reaction { user_id, post_id, emoji_name }`, keeping reaction pills in sync across clients.
+1. **Auto-reconnect:** the spawned task wraps the connect call in an infinite loop — `connect_to_websocket` only returns when a connection *ends* (drop, error, or graceful close), so the task logs errors (graceful closes are silent), sleeps 5 s, and connects again. The crate's `ws-keep-alive` feature sends periodic pings so half-dead connections (e.g. after laptop sleep) fail fast instead of hanging silently.
+2. **Event handling:** `WsHandler::callback` matches on the typed event kind. Mattermost nests payloads as **JSON-encoded strings** inside the envelope (`data.post`, `data.reaction`), so handlers still perform an inner parse of that string.
+   - `Posted` → emitted as `mm-post` with `IncomingMessage { id, file_ids, channel_id, sender, message }`. The post `id` powers the frontend's duplicate-delivery guard; `file_ids` lets attachments render live.
+   - `ReactionAdded` / `ReactionRemoved` → emitted as `mm-reaction-added` / `mm-reaction-removed` with a `Reaction { user_id, post_id, emoji_name }`, keeping reaction pills in sync across clients.
 
 The frontend subscribes with `window.__TAURI__.event.listen(...)`. This closes an elegant loop: a message you publish through `send_message` is echoed back to you by the server over this same WebSocket, so sent and received messages flow through one unified path into the UI. The frontend also listens for `mm-viewed` and `mm-emoji-added` — currently dormant hooks that light up if the WS loop is ever extended to forward `channel_viewed` / `emoji_added` events.
 
@@ -103,7 +120,7 @@ All endpoints are called against the session's `base_url` and authenticated with
 - `GET /api/v4/users/me/teams/{team_id}/channels` — channels for a team
 - `GET /api/v4/users/me/teams/{team_id}/channels/members` — my read-state per channel
 - `POST /api/v4/channels/members/me/view` — mark a channel viewed
-- `GET /api/v4/channels/{channel_id}/posts?per_page=100[&before=<post_id>]` — channel history (paged)
+- `GET /api/v4/channels/{channel_id}/posts?per_page=30[&before=<post_id>]` — channel history (paged)
 - `POST /api/v4/posts` — publish a message (optionally with `file_ids`)
 - `POST /api/v4/users/ids` / `POST /api/v4/users/search` — user resolution & search
 - `GET /api/v4/users/{user_id}/image` — avatar
