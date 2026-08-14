@@ -131,7 +131,6 @@ struct WsHandler{
 #[async_trait]
 impl WebsocketHandler for WsHandler {
     async fn callback(&self, message: WebsocketEvent) {
-        println!("WS event: {:?}", message.event);
         match message.event {
             WebsocketEventType::Posted =>
             { 
@@ -519,74 +518,22 @@ async fn connect_websocket(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
-    use futures_util::{SinkExt, StreamExt};
-    use tauri::Emitter;   
     {
         let mut guard = state.ws_task.lock().unwrap();
         if let Some(h) = guard.take() { h.abort(); }
     }
-    let session = state.current_session()?;
-
-    let ws_url = format!("{}/api/v4/websocket", session.base_url.replace("https://", "wss://"));
+    let mut client = state.current_client()?;
 
     let join_handle = tokio::spawn(
         async move {
-        let (ws_stream, _) = match tokio_tungstenite::connect_async(&ws_url).await {
-            Ok(ok) => ok,
-            Err(e) => { eprintln!("WS connect error: {}", e); return; }
-        };
-
-        let (mut write, mut read) = ws_stream.split();
-
-        let auth = serde_json::json!({
-            "seq": 1,
-            "action": "authentication_challenge",
-            "data": { "token": session.token }
-        });
-
-        let _ = write.send(tokio_tungstenite::tungstenite::Message::text(auth.to_string())).await;
-
-        while let Some(msg) = read.next().await {
-            match msg {
-                Ok(m) => {
-                    let text = m.to_string();
-
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if json["event"] == "posted" {
-                            if let Some(post_str) = json["data"]["post"].as_str() {
-                                if let Ok(post) = serde_json::from_str::<serde_json::Value>(post_str) {
-                                    let msg = IncomingMessage {
-                                        channel_id: post["channel_id"].as_str().unwrap_or("").to_string(),
-                                        sender:     json["data"]["sender_name"].as_str().unwrap_or("").to_string(),
-                                        message:    post["message"].as_str().unwrap_or("").to_string(),
-                                        id: post["id"].as_str().unwrap_or("").to_string(),
-                                        file_ids: post["file_ids"].as_array()
-                                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                                            .unwrap_or_default(),
-                                    };
-                                    let _ = app.emit("mm-post", msg);
-                                }
-                            }
-                        } else if json["event"] == "reaction_added" || json["event"] == "reaction_removed" {
-                            if let Some(r_str) = json["data"]["reaction"].as_str() {
-                                if let Ok(r) = serde_json::from_str::<serde_json::Value>(r_str) {
-                                    let payload = Reaction {
-                                        user_id:    r["user_id"].as_str().unwrap_or("").to_string(),
-                                        post_id:    r["post_id"].as_str().unwrap_or("").to_string(),
-                                        emoji_name: r["emoji_name"].as_str().unwrap_or("").to_string(),
-                                    };
-                                    let name = if json["event"] == "reaction_added" { "mm-reaction-added" } else { "mm-reaction-removed" };
-                                    let _ = app.emit(name, payload);
-                                }
-                            }    
-                        }
-                    }
+            loop{ 
+                let handler = WsHandler { app: app.clone() };
+                if let Err(e) = client.connect_to_websocket(handler).await {
+                    eprintln!("WS error: {}", e);
                 }
-                Err(e) => { eprintln!("WS read error: {}", e); break; }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
-        }
-        println!("WS closed");
-    });
+        });
     {
         let mut guard = state.ws_task.lock().unwrap();
         *guard = Some(join_handle);
