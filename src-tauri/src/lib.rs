@@ -301,7 +301,6 @@ async fn get_file(
 async fn fetch_me(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, AppError> {
-
     let client = state.current_client()?;
     let resp = client.query("GET", "users/me", None, None).await?;
     Ok(resp)
@@ -311,16 +310,9 @@ async fn fetch_me(
 async fn fetch_teams(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<Team>, AppError> {
-    let session = state.current_session()?;
 
-    let url = format!("{}/api/v4/users/me/teams", session.base_url);
-
-    let resp = reqwest::Client::new()
-        .get(url)
-        .bearer_auth(session.token)
-        .send()
-        .await?;
-
+    let client = state.current_client()?;
+    let resp = client.query("GET", "users/me/teams", None, None).await?;
     let teams = resp.json::<Vec<Team>>().await?;
 
     Ok(teams)
