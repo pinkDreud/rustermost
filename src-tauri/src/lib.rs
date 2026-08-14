@@ -1,6 +1,6 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use tauri::Manager;
 use std::sync::Mutex;
+use mattermost_api::{client::{AuthenticationData, Mattermost}, errors::ApiError};
 
 #[derive(Clone)]
 struct Session {
@@ -10,6 +10,7 @@ struct Session {
 
 struct AppState {
     session: Mutex<Option<Session>>,
+    session_m : Mutex<Option<Mattermost>>,
     channels: Mutex<Vec<Channel>>,
     ws_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -17,6 +18,10 @@ struct AppState {
 impl AppState {
     fn current_session(&self) -> Result<Session, AppError> {
         let guard = self.session.lock().unwrap();
+        guard.clone().ok_or(AppError::NotLoggedIn)
+    }
+    fn current_client(&self) -> Result<Mattermost, AppError> {
+        let guard = self.session_m.lock().unwrap();
         guard.clone().ok_or(AppError::NotLoggedIn)
     }
 }
@@ -144,6 +149,12 @@ struct IncomingMessage {
     message: String,
 }
 
+impl From<ApiError> for AppError {
+    fn from(e: ApiError) -> Self {
+        AppError::Network(e.to_string())
+    }
+}
+
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
         AppError::Network(e.to_string())
@@ -187,7 +198,6 @@ async fn capture_session(
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
 
-
     let parsed_url =  base_url.parse::<tauri::Url>().map_err(|e| e.to_string())?;
 
     let webview = app
@@ -206,6 +216,11 @@ async fn capture_session(
     let token = token_find.value().to_string();
 
     let mut guard = state.session.lock().unwrap();
+    let mut guard_m = state.session_m.lock().unwrap();
+
+    let auth_data = AuthenticationData::from_access_token(&token);
+    let cli = Mattermost::new(base_url.clone(), auth_data).map_err(|e| e.to_string())?;
+    *guard_m = Some(cli);
 
     *guard = Some(Session{ base_url, token: token.clone()} );
 
@@ -286,20 +301,10 @@ async fn get_file(
 async fn fetch_me(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, AppError> {
-    let session = state.current_session()?;
 
-    let url = format!("{}/api/v4/users/me", session.base_url);
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(url)
-        .bearer_auth(session.token)
-        .send()
-        .await?;
-
-    let body = resp.json::<serde_json::Value>().await?;
-
-    Ok(body)
+    let client = state.current_client()?;
+    let resp = client.query("GET", "users/me", None, None).await?;
+    Ok(resp)
 }
 
 #[tauri::command]
@@ -953,7 +958,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(AppState {
             session: Mutex::new(None),
-            channels: Mutex::new(Vec::new()),   // parte vuota
+            session_m: Mutex::new(None),
+            channels: Mutex::new(Vec::new()),
             ws_task:  Mutex::new(None),
         })
         .on_window_event(|window, event| {
