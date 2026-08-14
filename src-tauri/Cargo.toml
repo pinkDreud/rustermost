@@ -28,6 +28,7 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["full"] }
 base64 = "0.23.1"
 tauri-plugin-notification = "2"
+mattermost_api = { version = "0.8.2", features = ["ws-keep-alive"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
