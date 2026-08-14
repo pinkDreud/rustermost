@@ -233,20 +233,17 @@ async fn get_file_info(
     file_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, AppError> {
-    let session = state.current_session()?;
 
-    let url = format!("{}/api/v4/files/{}/info", session.base_url, file_id);
+    let client = state.current_client()?;
+    
+    let resp = client.query(
+        "GET",
+        &format!("files/{file_id}/info"),
+        None,
+        None
+    ).await?;
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(url)
-        .bearer_auth(session.token)
-        .send()
-        .await?;
-
-    let body = resp.json::<serde_json::Value>().await?;
-
-    Ok(body)
+    Ok(resp)
 }
 
 #[tauri::command]
@@ -555,22 +552,14 @@ async fn view_channel(
     channel_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let session = state.current_session()?;
 
-    let url = format!("{}/api/v4/channels/members/me/view", session.base_url);
+    let client = state.current_client()?;
 
     let body = serde_json::json!({
-            "channel_id": channel_id,
+        "channel_id": channel_id,
     });
-
-     reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&session.token)
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?;
-
+    let _resp: serde_json::Value = client.post("channels/members/me/view", None, &body).await?;
+    
     Ok(())
 }
 
@@ -581,9 +570,8 @@ async fn send_message(
     file_ids: Option<Vec<String>>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let session = state.current_session()?;
 
-    let url = format!("{}/api/v4/posts", session.base_url);
+    let client = state.current_client()?;
 
     let mut body = serde_json::json!({
             "channel_id": channel_id,
@@ -592,15 +580,8 @@ async fn send_message(
     if let Some(ids) = file_ids {
         body["file_ids"] = serde_json::json!(ids);
     }
-
-     reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&session.token)
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?;
-
+    let _resp: serde_json::Value = client.post("posts", None, &body).await?;
+ 
     Ok(())
 }
 
@@ -612,27 +593,17 @@ async fn execute_command(
     command: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, AppError> {
-    let session = state.current_session()?;
-
-    let url = format!("{}/api/v4/commands/execute", session.base_url);
+    let client = state.current_client()?;
 
     let body = serde_json::json!({
         "channel_id": channel_id,
         "command": command,
         "team_id": team_id,
-    });    
+    }); 
 
-    let resp = reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&session.token)
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?;
+    let resp = client.post("commands/execute", None, &body).await?;
 
-    let answer = resp.json::<serde_json::Value>().await?;
-    
-    Ok(answer)
+    Ok(resp)
 }
 
 #[tauri::command]
@@ -642,19 +613,15 @@ async fn add_reaction(
     user_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let session = state.current_session()?;
-
-    let url = format!("{}/api/v4/reactions", session.base_url);
+    let client = state.current_client()?;
 
     let body = Reaction{ user_id, post_id, emoji_name };
-    
-    reqwest::Client::new()
-        .post(&url)
-        .bearer_auth(&session.token)
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?;
+    let _resp : serde_json::Value = 
+    client.post(
+        "reactions",
+        None,
+        &body
+    ).await?;
 
     Ok(())
 }
@@ -667,16 +634,14 @@ async fn remove_reaction(
     user_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
-    let session = state.current_session()?;
+    let client = state.current_client()?;
 
-    let url = format!("{}/api/v4/users/{user_id}/posts/{post_id}/reactions/{emoji_name}", session.base_url);
-
-    reqwest::Client::new()
-        .delete(&url)
-        .bearer_auth(&session.token)
-        .send()
-        .await?
-        .error_for_status()?;
+    let _resp: serde_json::Value = client.query(
+        "DELETE",
+        &format!("users/{user_id}/posts/{post_id}/reactions/{emoji_name}"),
+        None,
+        None
+    ).await?;
 
     Ok(())
 }
@@ -783,19 +748,15 @@ async fn get_users_by_ids(
     ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<MMUser>, AppError> {
-    let session = state.current_session()?;
+    let client = state.current_client()?;
 
-    let url = format!("{}/api/v4/users/ids", session.base_url);
+    let resp = client.post(
+        "users/ids",
+        None,
+        &ids
+    ).await?;
 
-    let resp = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(&session.token)
-        .json(&ids)
-        .send()
-        .await?;
-
-    let users = resp.json::<Vec<MMUser>>().await?;
-    Ok(users)
+    Ok(resp)
 }
 
 
@@ -804,21 +765,18 @@ async fn search_users(
     term: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<MMUser>, AppError> {
-    let session = state.current_session()?;
-    let url = format!("{}/api/v4/users/search", session.base_url);
+
+    let client = state.current_client()?;
 
     let body = serde_json::json!({ "term": term });
 
-    let resp = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(&session.token)
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?;
+    let resp = client.post(
+        "users/search",
+        None,
+        &body
+    ).await?;
 
-    let users = resp.json::<Vec<MMUser>>().await?;
-    Ok(users)
+    Ok(resp)
 }
 
 #[tauri::command]
@@ -826,22 +784,17 @@ async fn create_chat(
     user_ids: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Channel, AppError> {
-    let session = state.current_session()?;
+
+    let client = state.current_client()?;
 
     // 2 id → direct message; 3+ → group message.
     let endpoint = if user_ids.len() <= 2 { "direct" } else { "group" };
-    let url = format!("{}/api/v4/channels/{}", session.base_url, endpoint);
-
-    let resp = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(&session.token)
-        .json(&user_ids)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    let channel = resp.json::<Channel>().await?;
-    Ok(channel)
+    let resp = client.post(
+        &format!("channels/{endpoint}"),
+        None,
+        &user_ids
+    ).await?;
+    Ok(resp)
 }
 
 #[tauri::command]
@@ -852,8 +805,8 @@ async fn create_named_channel(
     channel_type: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Channel, AppError> {
-    let session = state.current_session()?;
-    let url = format!("{}/api/v4/channels", session.base_url);
+
+    let client = state.current_client()?;
 
     let body = serde_json::json!({
         "team_id": team_id,
@@ -861,17 +814,13 @@ async fn create_named_channel(
         "display_name": display_name,
         "type": channel_type,
     });
+    let resp = client.post(
+        "channels",
+        None,
+        &body
+    ).await?;
 
-    let resp = reqwest::Client::new()
-        .post(url)
-        .bearer_auth(&session.token)
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?;
-
-    let channel = resp.json::<Channel>().await?;
-    Ok(channel)
+    Ok(resp)
 }
 #[tauri::command]
 async fn upload_file(
