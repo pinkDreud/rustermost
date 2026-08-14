@@ -1,6 +1,9 @@
 use tauri::Manager;
 use std::sync::Mutex;
 use mattermost_api::{client::{AuthenticationData, Mattermost}, errors::ApiError};
+use mattermost_api::{socket::{WebsocketHandler, WebsocketEvent, WebsocketEventType}};
+use async_trait::async_trait;
+use tauri::Emitter;
 
 #[derive(Clone)]
 struct Session {
@@ -120,6 +123,51 @@ struct Reaction {
     emoji_name: String,
 }
 
+#[derive()]
+struct WsHandler{
+    app: tauri::AppHandle,
+}
+
+#[async_trait]
+impl WebsocketHandler for WsHandler {
+    async fn callback(&self, message: WebsocketEvent) {
+        println!("WS event: {:?}", message.event);
+        match message.event {
+            WebsocketEventType::Posted =>
+            { 
+                if let Some(post_str) = message.data["post"].as_str() {
+                    if let Ok(post) = serde_json::from_str::<serde_json::Value>(post_str) {
+                    let msg = IncomingMessage {
+                        channel_id: post["channel_id"].as_str().unwrap_or("").to_string(),
+                        sender:     message.data["sender_name"].as_str().unwrap_or("").to_string(),
+                        message:    post["message"].as_str().unwrap_or("").to_string(),
+                        id: post["id"].as_str().unwrap_or("").to_string(),
+                        file_ids: post["file_ids"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default(),
+                    };
+                    let _ = self.app.emit("mm-post", msg);
+                    }
+                }
+            }
+            e @ (WebsocketEventType::ReactionAdded | WebsocketEventType::ReactionRemoved) => 
+            {   
+                if let Some(r_str) = message.data["reaction"].as_str() {
+                    if let Ok(r) = serde_json::from_str::<serde_json::Value>(r_str) {
+                        let payload = Reaction {
+                            user_id:    r["user_id"].as_str().unwrap_or("").to_string(),
+                            post_id:    r["post_id"].as_str().unwrap_or("").to_string(),
+                            emoji_name: r["emoji_name"].as_str().unwrap_or("").to_string(),
+                        };
+                        let name = if matches!(e, WebsocketEventType::ReactionAdded) { "mm-reaction-added" } else { "mm-reaction-removed" };
+                        let _ = self.app.emit(name, payload);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -235,7 +283,7 @@ async fn get_file_info(
 ) -> Result<serde_json::Value, AppError> {
 
     let client = state.current_client()?;
-    
+
     let resp = client.query(
         "GET",
         &format!("files/{file_id}/info"),
