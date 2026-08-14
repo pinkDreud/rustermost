@@ -61,7 +61,7 @@ const state = {
   pageLoading: false, // a page load is in flight
 };
 
-const PAGE_SIZE = 100; // matches the backend's per_page
+const PAGE_SIZE = 30; // matches the backend's per_page
 
 // ---------- element refs ----------
 const $ = (id) => document.getElementById(id);
