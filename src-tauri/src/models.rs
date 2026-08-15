@@ -90,4 +90,6 @@ pub struct MMUser {
     pub first_name: String,
     pub last_name: String,
     pub nickname: String,
+    #[serde(default)]
+    pub last_picture_update: i64,
 }

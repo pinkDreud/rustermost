@@ -20,11 +20,22 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .manage(AppState {
-            session: Mutex::new(None),
-            session_m: Mutex::new(None),
-            channels: Mutex::new(Vec::new()),
-            ws_task: Mutex::new(None),
+        .setup(|app| {
+            let cache_dir = app.path().app_cache_dir()?;
+            std::fs::create_dir_all(cache_dir.join("emoji"))?;
+            std::fs::create_dir_all(cache_dir.join("avatar"))?;
+            std::fs::create_dir_all(cache_dir.join("file"))?;
+            std::fs::create_dir_all(cache_dir.join("chat"))?;
+            println!("{}", cache_dir.display());
+            let state = AppState {
+                session: Mutex::new(None),
+                session_m: Mutex::new(None),
+                channels: Mutex::new(Vec::new()),
+                ws_task: Mutex::new(None),
+                cache_dir,
+            };
+            app.manage(state);
+            Ok(())
         })
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]

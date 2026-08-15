@@ -604,7 +604,14 @@ async function ensureAvatar(uid) {
   if (!uid || state.avatars[uid] || state.avatarPending.has(uid) || !state.avatarLookupEnabled) return;
   state.avatarPending.add(uid);
   try {
-    const dataUrl = await invoke("get_avatar", { userId: uid });
+    // Resolve the user first: last_picture_update versions the backend's disk
+    // cache key, and sending 0 for a not-yet-resolved user would file the
+    // avatar under a dead key on every startup.
+    if (!state.users[uid]) await resolveUsers([uid]);
+    const dataUrl = await invoke("get_avatar", {
+      userId: uid,
+      lastPictureUpdate: state.users[uid]?.last_picture_update ?? 0,
+    });
     if (dataUrl) {
       state.avatars[uid] = dataUrl;
       for (const el of document.querySelectorAll(`[data-uid="${uid}"]`)) paintAvatar(el, dataUrl);

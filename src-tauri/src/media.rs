@@ -40,10 +40,15 @@ pub async fn get_file(
 #[tauri::command]
 pub async fn get_avatar(
     user_id: String,
+    last_picture_update: i64,
     state: tauri::State<'_, crate::session::AppState>,
 ) -> Result<String, crate::error::AppError> {
     let session = state.current_session()?;
 
+    let avatar_path = state.cache_dir.join("avatar").join(format!("{user_id}_{}", last_picture_update));
+    if let Ok(cached) = std::fs::read_to_string(&avatar_path) {
+        return Ok(cached);
+    }
     let url = format!("{}/api/v4/users/{}/image", session.base_url, user_id);
 
     let resp = reqwest::Client::new()
@@ -56,7 +61,9 @@ pub async fn get_avatar(
 
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("data:image/png;base64,{}", b64))
+    let avatar_data = format!("data:image/png;base64,{}", b64);
+    let _ = std::fs::write(&avatar_path, &avatar_data);
+    Ok(avatar_data)
 }
 
 #[tauri::command]
@@ -82,6 +89,10 @@ pub async fn get_emoji_image(
     state: tauri::State<'_, crate::session::AppState>,
 ) -> Result<String, crate::error::AppError> {
     let session = state.current_session()?;
+    let emoji_path = state.cache_dir.join("emoji").join(format!("{emoji_id}"));
+    if let Ok(cached) = std::fs::read_to_string(&emoji_path) {
+        return Ok(cached);
+    }
 
     let url = format!("{}/api/v4/emoji/{emoji_id}/image", session.base_url);
     let resp = reqwest::Client::new()
@@ -101,7 +112,9 @@ pub async fn get_emoji_image(
 
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("data:{};base64,{}", mime, b64))
+    let emoji_data = format!("data:{};base64,{}", mime, b64);
+    let _ = std::fs::write(&emoji_path, &emoji_data);
+    Ok(emoji_data)
 }
 
 #[tauri::command]
