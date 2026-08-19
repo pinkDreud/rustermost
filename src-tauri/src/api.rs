@@ -61,7 +61,6 @@ pub async fn capture_session(
         .ok_or("No token found".to_string())?;
 
     let token = token_find.value().to_string();
-
     let mut guard = state.session.lock().unwrap();
     let mut guard_m = state.session_m.lock().unwrap();
 
@@ -69,12 +68,38 @@ pub async fn capture_session(
     let cli = Mattermost::new(base_url.clone(), auth_data).map_err(|e| e.to_string())?;
     *guard_m = Some(cli);
 
-    *guard = Some(Session {
+    let session = Session {
         base_url,
         token: token.clone(),
-    });
-
+    };
+    if let Ok(data) = serde_json::to_string(&session) {
+        atomic_file_write(&state.data_dir.join("session.json"), &data);
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&state.data_dir.join("session.json"), std::fs::Permissions::from_mode(0o600));
+        }
+    }
+    
+    *guard = Some(session);
+    
     Ok(token)
+}
+
+
+#[tauri::command]
+pub fn restore_session(
+    state: tauri::State<'_, AppState>,
+) -> Result<String, AppError> {
+    let data = std::fs::read_to_string(state.data_dir.join("session.json"))?;
+    let session: Session = serde_json::from_str(&data)?;
+    let mut guard = state.session.lock().unwrap();
+    let base_url = session.base_url.clone();
+    let auth_data = AuthenticationData::from_access_token(&session.token);
+    *guard = Some(session);
+    let mut guard_c = state.session_m.lock().unwrap();
+    let cli = Mattermost::new(base_url.clone(), auth_data)?;
+    *guard_c = Some(cli);
+    Ok(base_url)
 }
 
 #[tauri::command]

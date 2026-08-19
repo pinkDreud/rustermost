@@ -24,7 +24,8 @@ Authentication is delegated entirely to the Mattermost server's own SSO, so `rus
 
 1. The user enters their server URL and submits the form. The frontend calls `open_sso_window(url)`, which opens a dedicated Tauri `WebviewWindow` (label `"sso-login"`, 500×700) pointed at the Mattermost server. The user completes the login inside that webview, exactly as they would in a browser.
 2. Meanwhile the frontend polls: every 2 seconds it calls `capture_session(baseUrl)`. On the backend, `capture_session` looks up the `"sso-login"` webview, reads its cookies for the given URL via `cookies_for_url`, and searches for the `MMAUTHTOKEN` cookie. Until the user has finished logging in, no such cookie exists and the command rejects; the frontend swallows that rejection and retries on the next tick.
-3. Once the cookie appears, `capture_session` extracts its value, stores a `Session { base_url, token }` in the shared backend state, **and constructs a `mattermost_api` client** (`Mattermost::new` with `AuthenticationData::from_access_token`) stored alongside it, then returns the token to JavaScript (which stops the polling loop).
+3. Once the cookie appears, `capture_session` extracts its value, stores a `Session { base_url, token }` in the shared backend state, **and constructs a `mattermost_api` client** (`Mattermost::new` with `AuthenticationData::from_access_token`) stored alongside it, then returns the token to JavaScript (which stops the polling loop). It also **persists the session to disk**: the `Session` is serialized to `session.json` in the app data dir (`app_data_dir()`), written atomically and — on Unix — chmodded to `0600` so only the owner can read it.
+4. On the next launch the frontend first tries `restore_session`: the backend reads `session.json` back, rebuilds the client, and returns the `base_url`. The frontend then probes the server with `fetch_me` — if the restored token is still valid the app goes straight to the chat; if the file is missing or the token has expired, the chain fails and the normal SSO flow above runs instead (which overwrites `session.json`, so a stale file heals itself).
 
 From that point on, the captured `MMAUTHTOKEN` is used as a **Bearer token** on every request — the `mattermost_api` client sends it on JSON calls and in the WebSocket `authentication_challenge` automatically, and the raw-`reqwest` media commands attach it explicitly from `Session`. Because the credentials live in backend state, individual commands don't take them as arguments.
 
@@ -34,10 +35,12 @@ All shared state lives in a single struct, registered once at startup with Tauri
 
 ```rust
 pub struct AppState {
-    pub session:   Mutex<Option<Session>>,                       // raw credentials, set by capture_session
-    pub session_m: Mutex<Option<Mattermost>>,                    // mattermost_api client, set by capture_session
+    pub session:   Mutex<Option<Session>>,                       // raw credentials, set by capture_session / restore_session
+    pub session_m: Mutex<Option<Mattermost>>,                    // mattermost_api client, set by capture_session / restore_session
     pub channels:  Mutex<Vec<Channel>>,                          // in-memory cache
     pub ws_task:   Mutex<Option<tokio::task::JoinHandle<()>>>,   // the running WebSocket task
+    pub cache_dir: PathBuf,                                      // platform cache dir, resolved once in setup
+    pub data_dir:  PathBuf,                                      // platform data dir (session.json lives here)
 }
 
 #[derive(Clone)]
@@ -48,17 +51,39 @@ pub struct Session { pub base_url: String, pub token: String }
 - `channels` is an in-memory cache of the user's channels across all teams. It is populated by `fetch_all_channels` / `fetch_all_channels_with_members` and read back instantly (no network) by `get_cached_channels`.
 - `ws_task` holds the `JoinHandle` of the background WebSocket task. `connect_websocket` **aborts any previous task before spawning a new one**, making reconnection idempotent — without this, a frontend reload would leave a ghost connection behind and every message would be delivered (and rendered) twice.
 
+- `cache_dir` and `data_dir` are plain `PathBuf`s, not mutexes: they are written once during `.setup` (via Tauri's `app.path().app_cache_dir()` / `app_data_dir()`) and read-only afterwards, so no interior mutability is needed.
+
 The guiding rule for what belongs in state: **cache things that stay true; return things that change.** Per-user read-state (`msg_count`, `mention_count`) changes on every read from any device, so it is fetched fresh and returned, never cached.
+
+## Disk cache
+
+Media and messages are cached on disk under the platform cache dir (`app_cache_dir()`), split into four subdirectories. All entries are stored as their **final form** — complete `data:` URL strings, mime included — so a cache hit is a straight read-and-return with no re-encoding ("cache the result, not the ingredient").
+
+| Directory | Key | Invalidation |
+| --- | --- | --- |
+| `emoji/` | `<emoji_id>` | None — custom emoji images are immutable. |
+| `avatar/` | `<user_id>_<last_picture_update>` | By miss: the timestamp is part of the key, so a changed avatar simply never hits the old entry. No comparison logic exists. |
+| `file/` | `<file_id>` | None — attachment thumbnails are immutable. |
+| `chat/` | `<channel_id>` | Overwritten wholesale by every fresh `get_posts` fetch of the latest page. |
+
+Mechanics, uniform across all four:
+
+- **Cache-aside** in the media commands: try the disk before the network, write back after a successful fetch.
+- **Atomic writes** via `atomic_file_write` (temp file + `std::fs::rename` in the same directory), so a crash mid-write can never leave a truncated entry behind.
+- **Best-effort throughout**: cache reads and writes never use `?` — a cache failure falls through to the network and never reaches the caller. (Contrast `get_cached_posts` and `restore_session`, where a missing file *is* information for the frontend and is deliberately propagated as an `Err`.)
+- **Startup sweep**: `sweep_cache` runs in `.setup` and deletes entries older than 30 days (by filesystem mtime), best-effort.
+
+The `chat/` snapshots power a **stale-while-revalidate** open: `openChannel` first paints the cached snapshot via `get_cached_posts` (instant, and sets up paging), then fetches fresh posts over the network, repaints, and rewrites the snapshot. If the network fails but a snapshot painted, the stale messages stay up instead of an error screen — which is also the offline story. Only the latest page per channel is snapshotted; paging back through history always hits the network. Full file downloads (`get_file`) are intentionally uncached: too big, too rarely reopened.
 
 ## Error handling
 
 Commands that touch the network return `Result<_, AppError>`. `AppError` is a small enum:
 
 ```rust
-enum AppError { Network(String), Tauri(String), NotLoggedIn }
+enum AppError { Network(String), Tauri(String), Io(String), SerdeJson(String), NotLoggedIn }
 ```
 
-It implements `Display` (human-readable messages), `From<reqwest::Error>`, `From<tauri::Error>`, and `From<mattermost_api::errors::ApiError>` (so the `?` operator converts underlying failures automatically), and a custom `Serialize` that serializes the error to its `Display` string. Because Tauri serializes a command's `Err` value across the bridge, any `AppError` surfaces in JavaScript as a **rejected promise** carrying that string — catchable with ordinary `try/catch` (or `.catch`). This is exactly how the frontend's SSO polling loop distinguishes "token not ready yet" from success.
+It implements `Display` (human-readable messages), `From<reqwest::Error>`, `From<tauri::Error>`, `From<mattermost_api::errors::ApiError>`, `From<std::io::Error>`, and `From<serde_json::Error>` (so the `?` operator converts underlying failures automatically), and a custom `Serialize` that serializes the error to its `Display` string. Because Tauri serializes a command's `Err` value across the bridge, any `AppError` surfaces in JavaScript as a **rejected promise** carrying that string — catchable with ordinary `try/catch` (or `.catch`). This is exactly how the frontend's SSO polling loop distinguishes "token not ready yet" from success.
 
 Note that the two SSO-facing commands (`open_sso_window`, `capture_session`) instead return `Result<_, String>`, since they run before a session exists and report low-level errors (URL parse, missing webview, cookie not found) directly as strings.
 
@@ -70,7 +95,8 @@ All commands are invoked from JavaScript via `invoke("<name>", { ...args })`. Ta
 | --- | --- | --- |
 | `get_app_status` | — | Health check; returns a fixed "Backend Rust is on!" string. |
 | `open_sso_window` | `url` | Opens the `"sso-login"` webview window pointed at the Mattermost server. |
-| `capture_session` | `baseUrl` | Reads the SSO webview's cookies, finds `MMAUTHTOKEN`, stores the `Session` in state, and returns the token. |
+| `capture_session` | `baseUrl` | Reads the SSO webview's cookies, finds `MMAUTHTOKEN`, stores the `Session` in state, persists it to `session.json`, and returns the token. |
+| `restore_session` | — | Reads `session.json` back, rebuilds the client and the in-state `Session`, and returns the `base_url`. Rejects if no valid file exists — the frontend then falls back to SSO login. |
 | `fetch_me` | — | `GET /api/v4/users/me`; returns the current user as raw JSON. |
 | `fetch_teams` | — | `GET /api/v4/users/me/teams`; returns the user's teams. |
 | `fetch_channels` | `teamId` | Returns the user's channels for one team. |
@@ -82,18 +108,19 @@ All commands are invoked from JavaScript via `invoke("<name>", { ...args })`. Ta
 | `view_channel` | `channelId` | `POST /channels/members/me/view`; marks a channel read on the server (clears badges on other devices too). |
 | `connect_websocket` | — | Spawns (replacing any previous instance) the background task that maintains the real-time WebSocket connection. |
 | `send_message` | `channelId`, `message`, `fileIds?` | `POST /api/v4/posts`; publishes a message, optionally with uploaded file attachments. |
-| `get_posts` | `channelId`, `before?` | `GET /api/v4/channels/{id}/posts?per_page=30[&before=<id>]`; one page of history, oldest → newest. The `before` cursor drives infinite scroll (page size mirrored by `PAGE_SIZE` in `main.js`). |
+| `get_posts` | `channelId`, `before?` | `GET /api/v4/channels/{id}/posts?per_page=30[&before=<id>]`; one page of history, oldest → newest. The `before` cursor drives infinite scroll (page size mirrored by `PAGE_SIZE` in `main.js`). When `before` is absent, the result is also written to the `chat/` snapshot. |
+| `get_cached_posts` | `channelId` | Returns the channel's disk snapshot as a raw JSON string (parsed on the JS side); rejects if none exists. |
 | `get_users_by_ids` | `ids` | `POST /api/v4/users/ids`; batch-resolves user ids to user objects (names for DMs and message authors). |
 | `search_users` | `term` | `POST /api/v4/users/search`; people search for the new-conversation modal. |
-| `get_avatar` | `userId` | Fetches a user's profile image and returns it as a base64 `data:` URL. |
+| `get_avatar` | `userId`, `lastPictureUpdate` | Fetches a user's profile image as a base64 `data:` URL. Disk-cached under `avatar/<userId>_<lastPictureUpdate>`. |
 | `create_chat` | `userIds` | Creates a direct (2 ids) or group (3+) message channel. |
 | `create_named_channel` | `teamId`, `name`, `displayName`, `channelType` | Creates a public (`O`) or private (`P`) channel in a team. |
 | `get_file_info` | `fileId` | `GET /files/{id}/info`; name, size, and `mime_type` of an attachment. |
-| `get_file_thumbnail` | `fileId` | Attachment thumbnail as a `data:` URL (JPEG). |
+| `get_file_thumbnail` | `fileId` | Attachment thumbnail as a `data:` URL (JPEG). Disk-cached under `file/<fileId>`. |
 | `get_file` | `fileId`, `mime` | Full attachment as a `data:` URL; the mime comes from `get_file_info`. |
 | `upload_file` | `channelId`, `filename`, `dataB64` | `POST /api/v4/files` (raw body + query params); returns the new file's id, to be passed to `send_message`. |
 | `get_custom_emojis` | `page` | One page (200) of the server's custom emoji (`{id, name}`); the frontend pages until exhausted or a 25-page cap (5 000 emoji). |
-| `get_emoji_image` | `emojiId` | Custom emoji image as a `data:` URL; mime read from the `Content-Type` response header (PNG or GIF). |
+| `get_emoji_image` | `emojiId` | Custom emoji image as a `data:` URL; mime read from the `Content-Type` response header (PNG or GIF). Disk-cached under `emoji/<emojiId>`. |
 | `add_reaction` | `postId`, `emojiName`, `userId` | `POST /api/v4/reactions`; body is a serialized `Reaction`. |
 | `remove_reaction` | `postId`, `emojiName`, `userId` | `DELETE /users/{uid}/posts/{pid}/reactions/{name}`. |
 | `execute_command` | `channelId`, `teamId`, `command` | `POST /api/v4/commands/execute`; runs a slash command and returns the server's response (ephemeral `text` is rendered locally). |
