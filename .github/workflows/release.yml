@@ -9,12 +9,24 @@ permissions:
   contents: write
 
 jobs:
-  build-linux:
-    runs-on: ubuntu-22.04
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+
+    runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Tauri system dependencies
+      - name: Install Tauri system dependencies (Linux only)
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -29,6 +41,8 @@ jobs:
             librsvg2-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -42,3 +56,4 @@ jobs:
           releaseName: 'rustermost ${{ github.ref_name }}'
           releaseDraft: true
           prerelease: false
+          args: ${{ matrix.args }}
