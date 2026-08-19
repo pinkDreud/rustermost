@@ -4,6 +4,8 @@ use mattermost_api::errors::ApiError;
 pub enum AppError {
     Network(String),
     Tauri(String),
+    Io(String),
+    SerdeJson(String),
     NotLoggedIn,
 }
 
@@ -12,6 +14,8 @@ impl std::fmt::Display for AppError {
         match self {
             AppError::Network(msg) => write!(f, "Network error: {}", msg),
             AppError::Tauri(msg) => write!(f, "Tauri error: {}", msg),
+            AppError::Io(msg) => write!(f, "std::io error {}", msg),
+            AppError::SerdeJson(msg) => write!(f, "serde_json error {}", msg),
             AppError::NotLoggedIn => write!(f, "Missing token/the token is not working - log in?"),
         }
     }
@@ -34,6 +38,19 @@ impl From<tauri::Error> for AppError {
         AppError::Tauri(e.to_string())
     }
 }
+
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        AppError::Io(e.to_string())
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        AppError::SerdeJson(e.to_string())
+    }
+}
+
 
 impl serde::Serialize for AppError {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {

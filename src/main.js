@@ -481,9 +481,31 @@ async function openChannel(id) {
   state.pageOldest = null;
   state.pageMore = false;
 
+  // Stale-while-revalidate: paint the disk snapshot right away, then let the
+  // network fetch below repaint with fresh data (get_posts also rewrites the
+  // snapshot on the Rust side).
+  let stalePainted = false;
+  let freshPainted = false;
+  try {
+    const snapshot = JSON.parse(await invoke("get_cached_posts", { channelId: id }));
+    if (state.activeId !== id) return;
+    if (Array.isArray(snapshot) && snapshot.length) {
+      renderMessages(snapshot);
+      stalePainted = true;
+      state.pageOldest = snapshot[0].id;
+      state.pageMore = snapshot.length >= PAGE_SIZE;
+      resolveUsers(snapshot.map((p) => p.user_id)).then(() => {
+        if (state.activeId === id && !freshPainted) renderMessages(snapshot);
+      });
+    }
+  } catch {
+    // no snapshot on disk yet — keep the loading placeholder
+  }
+
   try {
     const posts = await invoke("get_posts", { channelId: id });
     if (state.activeId !== id) return; // user switched away while loading
+    freshPainted = true;
     renderMessages(posts);
     state.pageOldest = posts.length ? posts[0].id : null; // posts are oldest→newest
     state.pageMore = posts.length >= PAGE_SIZE; // a full page hints there's more
@@ -494,7 +516,9 @@ async function openChannel(id) {
     });
   } catch (e) {
     console.error("get_posts failed", e);
-    messagesEl.innerHTML = '<div class="error">Failed to load messages.</div>';
+    // If the snapshot already painted, stale messages beat an error screen
+    // (e.g. offline) — leave them up and fail quietly.
+    if (!stalePainted) messagesEl.innerHTML = '<div class="error">Failed to load messages.</div>';
   }
 }
 
@@ -604,7 +628,14 @@ async function ensureAvatar(uid) {
   if (!uid || state.avatars[uid] || state.avatarPending.has(uid) || !state.avatarLookupEnabled) return;
   state.avatarPending.add(uid);
   try {
-    const dataUrl = await invoke("get_avatar", { userId: uid });
+    // Resolve the user first: last_picture_update versions the backend's disk
+    // cache key, and sending 0 for a not-yet-resolved user would file the
+    // avatar under a dead key on every startup.
+    if (!state.users[uid]) await resolveUsers([uid]);
+    const dataUrl = await invoke("get_avatar", {
+      userId: uid,
+      lastPictureUpdate: state.users[uid]?.last_picture_update ?? 0,
+    });
     if (dataUrl) {
       state.avatars[uid] = dataUrl;
       for (const el of document.querySelectorAll(`[data-uid="${uid}"]`)) paintAvatar(el, dataUrl);

@@ -12,6 +12,7 @@ pub struct AppState {
     pub session_m: Mutex<Option<Mattermost>>,
     pub channels: Mutex<Vec<crate::models::Channel>>,
     pub ws_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub cache_dir: std::path::PathBuf,
 }
 
 impl AppState {
