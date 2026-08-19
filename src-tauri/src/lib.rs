@@ -15,6 +15,21 @@ use tauri::Manager;
 mod api;
 use api::*;
 
+fn sweep_cache(dir: &std::path::Path) {
+    if let Ok(iterator) = std::fs::read_dir(dir) {
+        for item in iterator.flatten() {
+            if let Ok(last_modified) = item.metadata().and_then(|meta| meta.modified()){
+                if let Ok(time_from_last_modified) = last_modified.elapsed() {
+                    if time_from_last_modified > std::time::Duration::from_secs(60*60*24*30) {
+                        println!("Removing - {}, it's more than 30 days old", &item.path().display());
+                        let _ = std::fs::remove_file(item.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -27,6 +42,10 @@ pub fn run() {
             std::fs::create_dir_all(cache_dir.join("file"))?;
             std::fs::create_dir_all(cache_dir.join("chat"))?;
             println!("{}", cache_dir.display());
+            sweep_cache(&cache_dir.join("emoji"));
+            sweep_cache(&cache_dir.join("avatar"));
+            sweep_cache(&cache_dir.join("file"));
+            sweep_cache(&cache_dir.join("chat"));
             let state = AppState {
                 session: Mutex::new(None),
                 session_m: Mutex::new(None),
