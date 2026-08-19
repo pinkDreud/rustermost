@@ -45,7 +45,7 @@ pub struct Post {
     pub user_id: String,
     pub create_at: i64,
     #[serde(default)]
-    pub file_ids: Vec<String>,
+    pub file_ids: Option<Vec<String>>,
     #[serde(default)]
     pub metadata: PostMetadata,
 }
@@ -53,7 +53,7 @@ pub struct Post {
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone, Default)]
 pub struct PostMetadata {
     #[serde(default)]
-    pub reactions: Vec<Reaction>,
+    pub reactions: Option<Vec<Reaction>>
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]

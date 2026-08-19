@@ -314,14 +314,15 @@ pub async fn get_posts(
         params.push(("before", id.as_str()));
     }
 
-    let list: PostList = client
-        .query(
-            "GET",
-            &format!("channels/{channel_id}/posts"),
-            Some(&params),
-            None,
-        )
-        .await?;
+    let raw_list : serde_json::Value = client
+    .query(
+        "GET",
+        &format!("channels/{channel_id}/posts"),
+        Some(&params),
+        None,
+    )
+    .await?;
+    let list : PostList = serde_json::from_value(raw_list)?;
 
     // 'order' -> from new to old
     let posts = list
