@@ -1,6 +1,14 @@
 /* rustermost — dark modern UI. Frontend only; talks to the existing Rust commands. */
 
+/* Type scale: the root font-size is the single knob the font-size setting turns
+   (see applySettings in main.js; the fallback here must match FONT_SIZES.medium
+   there). Every font-size below is in rem so the whole UI scales together. Box
+   sizes of fixed chrome (avatar circles, round buttons) stay in px on purpose
+   so the layout doesn't reflow — only the glyph inside them scales. */
+html { font-size: var(--app-font-size, 14px); }
+
 :root {
+  color-scheme: dark;
   --bg-0: #0d0f13;   /* deepest / conversation bg */
   --bg-1: #14171d;   /* sidebar */
   --bg-2: #1b1f27;   /* hover / elevated */
@@ -12,11 +20,51 @@
   --accent: #4f8cff;
   --accent-dim: #2f4a7a;
   --bubble-me: #2b5c9b;
+  --bubble-me-text: #eaf2ff;
   --bubble-other: #232833;
   --unread: #4f8cff;
   --danger: #ff6b6b;
   --radius: 12px;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --scrollbar: #2b313c;
+  --scrollbar-hover: #363d4a;
+  --avatar-bg: #313846;
+  --code-bg: rgba(0, 0, 0, 0.35);
+  --login-glow: #1a2740;
+  --chip-text: #eaf2ff;
+  --accent-wash: rgba(79, 140, 255, 0.08);
+}
+
+/* Light theme — the same color variables with different values (geometry like
+   --radius is shared, not re-declared). Toggled by data-theme on <html> (set
+   from the Theme setting; "system" follows the OS). A few surfaces stay
+   hardcoded on purpose because they sit on accent/photo backgrounds: the modal
+   and lightbox scrims and the DM avatar gradient. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-0: #f4f5f8;
+  --bg-1: #ffffff;
+  --bg-2: #eceef2;
+  --bg-3: #e5e8ee;
+  --text: #1b2028;
+  --text-dim: #5a6472;
+  --text-faint: #8b94a1;
+  --border: #d9dde4;
+  --accent: #2f6fdb;
+  --accent-dim: #bcd2f5;
+  --bubble-me: #2f6fdb;
+  --bubble-me-text: #ffffff;
+  --bubble-other: #e5e8ee;
+  --unread: #2f6fdb;
+  --danger: #d64545;
+  --shadow: 0 8px 30px rgba(30, 40, 60, 0.16);
+  --scrollbar: #c3c9d2;
+  --scrollbar-hover: #aab2be;
+  --avatar-bg: #9aa4b3;
+  --code-bg: rgba(20, 30, 50, 0.08);
+  --login-glow: #dbe6f8;
+  --chip-text: #1b2028;
+  --accent-wash: rgba(47, 111, 219, 0.08);
 }
 
 * { box-sizing: border-box; }
@@ -27,7 +75,6 @@ html, body {
   background: var(--bg-0);
   color: var(--text);
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
-  font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -35,8 +82,8 @@ html, body {
 
 /* ---------- scrollbars ---------- */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #2b313c; border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #363d4a; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ---------- login ---------- */
@@ -45,7 +92,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(1200px 600px at 50% -10%, #1a2740 0%, var(--bg-0) 60%);
+  background: radial-gradient(1200px 600px at 50% -10%, var(--login-glow) 0%, var(--bg-0) 60%);
 }
 .login-card {
   width: 360px;
@@ -65,7 +112,7 @@ html, body {
   margin: 0 auto 14px;
 }
 .wordmark {
-  font-size: 30px;
+  font-size: 2.14rem;
   font-weight: 800;
   letter-spacing: -0.5px;
   margin: 0 0 4px;
@@ -81,7 +128,7 @@ html, body {
   color: var(--text);
   border-radius: 10px;
   padding: 11px 13px;
-  font-size: 14px;
+  font-size: 1rem;
   outline: none;
   transition: border-color 0.15s;
 }
@@ -98,12 +145,12 @@ button {
   color: white;
   border-radius: 10px;
   padding: 11px;
-  font-size: 15px;
+  font-size: 1.07rem;
   font-weight: 600;
   transition: filter 0.15s;
 }
 .login-form button:hover { filter: brightness(1.08); }
-.login-status { color: var(--text-dim); min-height: 18px; margin: 16px 0 0; font-size: 13px; }
+.login-status { color: var(--text-dim); min-height: 18px; margin: 16px 0 0; font-size: 0.93rem; }
 .login-status.error { color: var(--danger); }
 
 /* ---------- app layout ---------- */
@@ -138,17 +185,18 @@ button {
   text-transform: uppercase;
 }
 .me-name { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.new-btn {
+.icon-btn {
   flex: 0 0 auto;
   width: 34px; height: 34px;
   border-radius: 50%;
   background: var(--bg-3);
   color: var(--text);
-  font-size: 20px; line-height: 1;
+  font-size: 1.43rem; line-height: 1;
   display: flex; align-items: center; justify-content: center;
   transition: background 0.15s;
 }
-.new-btn:hover { background: var(--accent); color: #fff; }
+.icon-btn:hover { background: var(--accent); color: #fff; }
+.settings-btn { font-size: 1.14rem; }
 .search-wrap { padding: 12px; }
 .search-wrap input { width: 100%; }
 
@@ -162,7 +210,7 @@ button {
   align-items: center;
   gap: 7px;
   padding: 10px 16px 6px;
-  font-size: 11px;
+  font-size: 0.79rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-faint);
@@ -172,8 +220,8 @@ button {
 }
 .section-title:hover { color: var(--text-dim); }
 .section-title .chevron {
-  font-size: 9px;
-  width: 9px;
+  font-size: 0.64rem;
+  width: 0.64rem;
   color: var(--text-faint);
   transition: transform 0.12s;
 }
@@ -187,14 +235,14 @@ button {
 }
 .channel-item:hover { background: var(--bg-2); }
 .channel-item.active { background: var(--bg-2); border-left-color: var(--accent); }
-.item-avatar { width: 34px; height: 34px; font-size: 13px; background: #313846; }
+.item-avatar { width: 34px; height: 34px; font-size: 0.93rem; background: var(--avatar-bg); }
 .item-avatar.dm { background: linear-gradient(135deg, #3a7d5a, #2f9e7b); }
 .item-main { flex: 1; min-width: 0; }
 .item-name {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   font-weight: 500;
 }
-.item-sub { font-size: 12px; color: var(--text-faint); }
+.item-sub { font-size: 0.86rem; color: var(--text-faint); }
 .badge {
   flex: 0 0 auto;
   min-width: 20px; height: 20px;
@@ -202,10 +250,10 @@ button {
   border-radius: 10px;
   background: var(--unread);
   color: white;
-  font-size: 12px; font-weight: 700;
+  font-size: 0.86rem; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
 }
-.list-empty { padding: 10px 16px; color: var(--text-faint); font-size: 13px; }
+.list-empty { padding: 10px 16px; color: var(--text-faint); font-size: 0.93rem; }
 
 /* ---------- conversation ---------- */
 .conversation { flex: 1; display: flex; flex-direction: column; background: var(--bg-0); min-width: 0; }
@@ -214,8 +262,8 @@ button {
   flex: 1; display: flex; align-items: center; justify-content: center;
   color: var(--text-dim); text-align: center;
 }
-.empty-logo { font-size: 44px; margin-bottom: 10px; }
-.empty-hint { color: var(--text-faint); font-size: 13px; }
+.empty-logo { font-size: 3.14rem; margin-bottom: 10px; }
+.empty-hint { color: var(--text-faint); font-size: 0.93rem; }
 
 .chat-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .chat-header {
@@ -223,8 +271,8 @@ button {
   border-bottom: 1px solid var(--border);
   background: var(--bg-1);
 }
-.chat-title { font-weight: 700; font-size: 16px; }
-.chat-sub { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.chat-title { font-weight: 700; font-size: 1.14rem; }
+.chat-sub { font-size: 0.86rem; color: var(--text-faint); margin-top: 2px; }
 
 .messages {
   flex: 1;
@@ -236,6 +284,9 @@ button {
 }
 .loading, .error { color: var(--text-dim); text-align: center; margin: auto; }
 .error { color: var(--danger); }
+/* the "loading older" spinner is prepended to the list — don't let margin:auto
+   center it in the leftover space */
+.top-loading { margin: 0 auto 6px; }
 
 .msg-row { display: flex; align-items: flex-end; gap: 8px; max-width: 80%; }
 .msg-row:not(.mine) { align-self: flex-start; }
@@ -245,19 +296,17 @@ button {
   flex: 0 0 auto;
   width: 30px; height: 30px;
   border-radius: 50%;
-  background-color: #313846;
+  background-color: var(--avatar-bg);
   background-size: cover;
   background-position: center;
   display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700; color: white;
+  font-size: 0.86rem; font-weight: 700; color: white;
   text-transform: uppercase;
   margin-bottom: 2px;
 }
-.msg-avatar.has-img { background-color: transparent; }
-
 .msg { min-width: 0; display: flex; flex-direction: column; }
 .msg-me { align-items: flex-end; }
-.msg-meta { font-size: 11px; color: var(--text-faint); margin: 0 4px 3px; }
+.msg-meta { font-size: 0.79rem; color: var(--text-faint); margin: 0 4px 3px; }
 .msg-body {
   padding: 9px 13px;
   border-radius: 14px;
@@ -267,7 +316,7 @@ button {
   overflow-wrap: anywhere;
 }
 .msg-other .msg-body { background: var(--bubble-other); border-bottom-left-radius: 4px; }
-.msg-me .msg-body { background: var(--bubble-me); color: #eaf2ff; border-bottom-right-radius: 4px; }
+.msg-me .msg-body { background: var(--bubble-me); color: var(--bubble-me-text); border-bottom-right-radius: 4px; }
 
 /* ---------- composer ---------- */
 .composer {
@@ -291,14 +340,28 @@ button {
   border-radius: 50%;
   background: var(--accent);
   color: white;
-  font-size: 17px;
+  font-size: 1.21rem;
   display: flex; align-items: center; justify-content: center;
   transition: filter 0.15s, transform 0.1s;
 }
 .composer button:hover { filter: brightness(1.1); }
 .composer button:active { transform: scale(0.94); }
 
-/* ---------- new-conversation modal ---------- */
+/* ---------- compact density ---------- */
+/* Toggled by data-density on <html> (the "Message density" setting). Tightens
+   padding/gaps and shrinks the avatar circles across messages, sidebar rows,
+   both headers and the composer; font sizes are deliberately untouched —
+   that's the font-size setting's job. */
+:root[data-density="compact"] .messages { gap: 3px; padding: 12px 16px; }
+:root[data-density="compact"] .msg-body { padding: 5px 10px; }
+:root[data-density="compact"] .msg-avatar { width: 24px; height: 24px; }
+:root[data-density="compact"] .channel-item { padding: 5px 12px; }
+:root[data-density="compact"] .item-avatar { width: 28px; height: 28px; }
+:root[data-density="compact"] .sidebar-header { padding: 10px 14px; }
+:root[data-density="compact"] .chat-header { padding: 9px 16px; }
+:root[data-density="compact"] .composer { padding: 10px 16px; }
+
+/* ---------- modal chrome (shared: new-conversation + settings) ---------- */
 .modal-overlay {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.55);
@@ -320,17 +383,18 @@ button {
   padding: 14px 16px;
   border-bottom: 1px solid var(--border);
 }
+.modal-title { font-weight: 700; font-size: 1.07rem; }
 .seg { display: flex; gap: 4px; background: var(--bg-3); border-radius: 10px; padding: 3px; }
 .seg-btn {
   background: transparent; color: var(--text-dim);
-  padding: 6px 16px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  padding: 6px 16px; border-radius: 8px; font-size: 0.93rem; font-weight: 600;
 }
 .seg-btn.active { background: var(--accent); color: #fff; }
-.modal-close { background: transparent; color: var(--text-dim); font-size: 16px; }
+.modal-close { background: transparent; color: var(--text-dim); font-size: 1.14rem; }
 .modal-close:hover { color: var(--text); }
 
 .modal-body { padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-.modal-label { font-size: 12px; color: var(--text-faint); font-weight: 600; margin-top: 2px; }
+.modal-label { font-size: 0.86rem; color: var(--text-faint); font-weight: 600; margin-top: 2px; }
 .modal-input {
   width: 100%;
   background: var(--bg-3);
@@ -338,7 +402,7 @@ button {
   color: var(--text);
   border-radius: 10px;
   padding: 10px 12px;
-  font-size: 14px; font-family: inherit;
+  font-size: 1rem; font-family: inherit;
   outline: none;
 }
 .modal-input:focus { border-color: var(--accent); }
@@ -347,11 +411,11 @@ select.modal-input { appearance: none; cursor: pointer; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   display: flex; align-items: center; gap: 6px;
-  background: var(--accent-dim); color: #eaf2ff;
-  border-radius: 20px; padding: 4px 6px 4px 10px; font-size: 13px;
+  background: var(--accent-dim); color: var(--chip-text);
+  border-radius: 20px; padding: 4px 6px 4px 10px; font-size: 0.93rem;
 }
-.chip button { background: transparent; color: #cdd9ee; font-size: 13px; line-height: 1; padding: 0 2px; }
-.chip button:hover { color: #fff; }
+.chip button { background: transparent; color: var(--chip-text); opacity: 0.75; font-size: 0.93rem; line-height: 1; padding: 0 2px; }
+.chip button:hover { opacity: 1; }
 
 .people-results { display: flex; flex-direction: column; max-height: 240px; overflow-y: auto; }
 .person-row {
@@ -362,27 +426,32 @@ select.modal-input { appearance: none; cursor: pointer; }
 .person-row.picked { opacity: 0.5; }
 .person-avatar {
   flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%;
-  background: #313846; background-size: cover; background-position: center;
+  background: var(--avatar-bg); background-size: cover; background-position: center;
   display: flex; align-items: center; justify-content: center;
-  font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase;
+  font-size: 0.86rem; font-weight: 700; color: #fff; text-transform: uppercase;
 }
 .person-main { min-width: 0; }
 .person-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.person-sub { font-size: 12px; color: var(--text-faint); }
+.person-sub { font-size: 0.86rem; color: var(--text-faint); }
 
-.radio-row { display: flex; gap: 18px; font-size: 14px; color: var(--text-dim); }
+.radio-row { display: flex; gap: 18px; font-size: 1rem; color: var(--text-dim); }
 .radio-row label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .radio-row input { accent-color: var(--accent); }
 
-.modal-hint { font-size: 12px; color: var(--text-faint); margin: 0; }
-.modal-error { font-size: 13px; color: var(--danger); margin: 0; min-height: 0; }
+.modal-hint { font-size: 0.86rem; color: var(--text-faint); margin: 0; }
+.modal-error { font-size: 0.93rem; color: var(--danger); margin: 0; min-height: 0; }
 .modal-primary {
   background: var(--accent); color: #fff;
-  border-radius: 10px; padding: 11px; font-size: 15px; font-weight: 600;
+  border-radius: 10px; padding: 11px; font-size: 1.07rem; font-weight: 600;
   transition: filter 0.15s;
 }
 .modal-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .modal-primary:disabled { opacity: 0.5; cursor: default; }
+
+/* ---------- settings modal (settings-only bits) ---------- */
+.setting-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
+.option-seg { align-self: flex-start; }
+.settings-hint { margin-top: 4px; }
 
 /* ---------- attachments ---------- */
 .attachments {
@@ -393,7 +462,7 @@ select.modal-input { appearance: none; cursor: pointer; }
 }
 .attachment {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 0.86rem;
 }
 .attachment.image {
   cursor: pointer;
@@ -438,15 +507,19 @@ select.modal-input { appearance: none; cursor: pointer; }
 /* ---------- message markdown ---------- */
 .msg-body a { color: var(--accent); text-decoration: none; word-break: break-all; }
 .msg-body a:hover { text-decoration: underline; }
+/* In my own bubble the background IS the accent color (identical hex in the
+   light theme), so links and quotes there use the bubble's text color. */
+.msg-me .msg-body a { color: var(--bubble-me-text); text-decoration: underline; }
+.msg-me .msg-body blockquote { color: var(--bubble-me-text); opacity: 0.85; }
 .msg-body code {
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--code-bg);
   padding: 1px 5px;
   border-radius: 4px;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: 0.86rem;
 }
 .msg-body pre {
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--code-bg);
   padding: 8px 10px;
   border-radius: 8px;
   overflow-x: auto;
@@ -465,7 +538,7 @@ select.modal-input { appearance: none; cursor: pointer; }
 .attach-btn {
   background: transparent;
   color: var(--text-dim);
-  font-size: 18px;
+  font-size: 1.29rem;
   padding: 8px 6px;
   border-radius: 8px;
   line-height: 1;
@@ -481,7 +554,7 @@ select.modal-input { appearance: none; cursor: pointer; }
 }
 .pending-error {
   color: var(--danger);
-  font-size: 12px;
+  font-size: 0.86rem;
   align-self: center;
 }
 
@@ -493,11 +566,11 @@ select.modal-input { appearance: none; cursor: pointer; }
   inset: 8px;
   border: 2px dashed var(--accent);
   border-radius: var(--radius);
-  background: rgba(79, 140, 255, 0.08);
+  background: var(--accent-wash);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 1.14rem;
   color: var(--accent);
   pointer-events: none;
   z-index: 10;
@@ -530,12 +603,12 @@ img.emoji {
   gap: 8px;
   padding: 7px 10px;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.93rem;
   color: var(--text);
 }
-.emoji-row.sel, .emoji-row:hover { background: var(--bg-3); }
-.emoji-row .glyph { width: 1.6em; text-align: center; font-size: 16px; line-height: 1; }
-.emoji-row img.emoji { height: 18px; }
+.emoji-row:hover { background: var(--bg-3); }
+.emoji-row.sel { background: var(--accent-dim); }
+.emoji-row .glyph { width: 1.6em; text-align: center; font-size: 1.14rem; line-height: 1; }
 
 /* ---------- reactions ---------- */
 .reactions {
@@ -553,7 +626,7 @@ img.emoji {
   border-radius: 999px;
   padding: 2px 9px;
   color: var(--text);
-  font-size: 13px;
+  font-size: 0.93rem;
   line-height: 1.5;
 }
 .reaction-pill:hover { border-color: var(--accent-dim); }
@@ -561,7 +634,7 @@ img.emoji {
   background: var(--accent-dim);
   border-color: var(--accent);
 }
-.reaction-pill .count { font-size: 11px; color: var(--text-dim); }
+.reaction-pill .count { font-size: 0.79rem; color: var(--text-dim); }
 .reaction-pill.mine .count { color: var(--text); }
 .reaction-add {
   background: transparent;
@@ -569,7 +642,7 @@ img.emoji {
   border-radius: 999px;
   color: var(--text-faint);
   padding: 2px 9px;
-  font-size: 13px;
+  font-size: 0.93rem;
   line-height: 1.5;
   opacity: 0;
   transition: opacity 0.12s;
@@ -593,7 +666,7 @@ img.emoji {
   background: var(--bg-3);
   color: var(--text);
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: 0.93rem;
   outline: none;
 }
 .reaction-picker-list { max-height: 240px; overflow-y: auto; }
@@ -611,10 +684,10 @@ img.emoji {
   border-radius: var(--radius);
   padding: 8px 12px;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 0.93rem;
 }
 .ephemeral-tag {
-  font-size: 11px;
+  font-size: 0.79rem;
   color: var(--text-faint);
   margin-top: 3px;
 }

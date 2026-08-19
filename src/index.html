@@ -4,6 +4,23 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="favicon.png" />
+    <script>
+      // Apply the saved display settings before the first paint. main.js is a
+      // deferred module, so it runs too late to stop a flash of the default
+      // dark/medium look; this tiny blocking copy closes that gap. The values
+      // MUST stay in sync with the SETTINGS_* constants in main.js.
+      (function () {
+        var FONT = { small: "13px", medium: "14px", large: "16px" };
+        var s = {};
+        try { s = JSON.parse(localStorage.getItem("rustermost.settings")) || {}; } catch (e) {}
+        var root = document.documentElement;
+        if (FONT[s.fontSize]) root.style.setProperty("--app-font-size", FONT[s.fontSize]);
+        var light = s.theme === "light" ||
+          (s.theme === "system" && window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches);
+        root.dataset.theme = light ? "light" : "dark";
+        root.dataset.density = s.density === "compact" ? "compact" : "comfortable";
+      })();
+    </script>
     <link rel="stylesheet" href="styles.css" />
     <title>rustermost</title>
     <script type="module" src="/main.js" defer></script>
@@ -35,7 +52,8 @@
         <header class="sidebar-header">
           <div class="me-avatar" id="me-avatar">?</div>
           <div class="me-name" id="me-name">…</div>
-          <button id="new-btn" class="new-btn" title="New conversation">＋</button>
+          <button id="settings-btn" class="icon-btn settings-btn" title="Settings">⚙</button>
+          <button id="new-btn" class="icon-btn" title="New conversation">＋</button>
         </header>
         <div class="search-wrap">
           <input id="search-input" type="text" placeholder="Search conversations…" autocomplete="off" />
@@ -108,6 +126,42 @@
           </div>
           <p id="channel-error" class="modal-error"></p>
           <button id="channel-create" class="modal-primary" type="button" disabled>Create channel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== SETTINGS MODAL ===================== -->
+    <div id="settings-overlay" class="modal-overlay hidden">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="modal-title">Settings</div>
+          <button id="settings-close" class="modal-close" type="button" title="Close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="setting-row">
+            <div class="modal-label">Font size</div>
+            <div class="seg option-seg" data-setting="fontSize" role="group" aria-label="Font size">
+              <button class="seg-btn" type="button" data-value="small">Small</button>
+              <button class="seg-btn" type="button" data-value="medium">Medium</button>
+              <button class="seg-btn" type="button" data-value="large">Large</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="modal-label">Theme</div>
+            <div class="seg option-seg" data-setting="theme" role="group" aria-label="Theme">
+              <button class="seg-btn" type="button" data-value="dark">Dark</button>
+              <button class="seg-btn" type="button" data-value="light">Light</button>
+              <button class="seg-btn" type="button" data-value="system">System</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="modal-label">Message density</div>
+            <div class="seg option-seg" data-setting="density" role="group" aria-label="Message density">
+              <button class="seg-btn" type="button" data-value="comfortable">Comfortable</button>
+              <button class="seg-btn" type="button" data-value="compact">Compact</button>
+            </div>
+          </div>
+          <p class="modal-hint settings-hint">Changes apply immediately and are remembered.</p>
         </div>
       </div>
     </div>
