@@ -13,7 +13,6 @@ pub struct AppState {
     pub channels: Mutex<Vec<crate::models::Channel>>,
     pub ws_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub cache_dir: std::path::PathBuf,
-    pub cache_dir: std::path::PathBuf,
     pub data_dir: std::path::PathBuf,
 }
 
