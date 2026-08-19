@@ -5,6 +5,8 @@ use tauri::Manager;
 
 use mattermost_api::client::{AuthenticationData, Mattermost};
 
+use crate::atomic_file_write;
+
 #[tauri::command]
 pub fn get_app_status() -> String {
     "Backend Rust is on!".to_string()
@@ -194,6 +196,16 @@ pub fn get_cached_channels(state: tauri::State<'_, AppState>) -> Vec<Channel> {
 }
 
 #[tauri::command]
+pub fn get_cached_posts(
+    channel_id: String,
+    state: tauri::State<'_, AppState>
+) -> Result<String, AppError> {
+    let cache_path = state.cache_dir.join("chat").join(&channel_id);
+    Ok(std::fs::read_to_string(&cache_path)?)
+}
+
+
+#[tauri::command]
 pub async fn view_channel(
     channel_id: String,
     state: tauri::State<'_, AppState>,
@@ -318,7 +330,14 @@ pub async fn get_posts(
         .rev()
         .filter_map(|id| list.posts.get(id).cloned())
         .collect();
+    
 
+    if before.is_none() {
+        let chat_path = state.cache_dir.join("chat").join(&channel_id);
+        if let Ok(post_serialized) = serde_json::to_string(&posts){
+            atomic_file_write(&chat_path, &post_serialized);
+        }
+    }
     Ok(posts)
 }
 

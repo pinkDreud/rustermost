@@ -92,7 +92,8 @@ pub fn run() {
             get_custom_emojis,
             add_reaction,
             remove_reaction,
-            execute_command
+            execute_command,
+            get_cached_posts
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

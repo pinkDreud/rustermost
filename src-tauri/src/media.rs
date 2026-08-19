@@ -1,5 +1,4 @@
-
-fn atomic_file_write(
+pub(crate) fn atomic_file_write(
     path : &std::path::Path,
     data : &str
 ) {

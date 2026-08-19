@@ -4,6 +4,7 @@ use mattermost_api::errors::ApiError;
 pub enum AppError {
     Network(String),
     Tauri(String),
+    Io(String),
     NotLoggedIn,
 }
 
@@ -12,6 +13,7 @@ impl std::fmt::Display for AppError {
         match self {
             AppError::Network(msg) => write!(f, "Network error: {}", msg),
             AppError::Tauri(msg) => write!(f, "Tauri error: {}", msg),
+            AppError::Io(msg) => write!(f, "std::io error {}", msg),
             AppError::NotLoggedIn => write!(f, "Missing token/the token is not working - log in?"),
         }
     }
@@ -32,6 +34,12 @@ impl From<reqwest::Error> for AppError {
 impl From<tauri::Error> for AppError {
     fn from(e: tauri::Error) -> Self {
         AppError::Tauri(e.to_string())
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(e: std::io::Error) -> Self {
+        AppError::Io(e.to_string())
     }
 }
 
