@@ -53,7 +53,7 @@ pub struct Post {
 #[derive(Debug, serde::Deserialize, serde::Serialize, Clone, Default)]
 pub struct PostMetadata {
     #[serde(default)]
-    pub reactions: Option<Vec<Reaction>>
+    pub reactions: Option<Vec<Reaction>>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]

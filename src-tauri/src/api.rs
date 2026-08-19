@@ -74,22 +74,23 @@ pub async fn capture_session(
     };
     if let Ok(data) = serde_json::to_string(&session) {
         atomic_file_write(&state.data_dir.join("session.json"), &data);
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&state.data_dir.join("session.json"), std::fs::Permissions::from_mode(0o600));
+            let _ = std::fs::set_permissions(
+                &state.data_dir.join("session.json"),
+                std::fs::Permissions::from_mode(0o600),
+            );
         }
     }
-    
+
     *guard = Some(session);
-    
+
     Ok(token)
 }
 
-
 #[tauri::command]
-pub fn restore_session(
-    state: tauri::State<'_, AppState>,
-) -> Result<String, AppError> {
+pub fn restore_session(state: tauri::State<'_, AppState>) -> Result<String, AppError> {
     let data = std::fs::read_to_string(state.data_dir.join("session.json"))?;
     let session: Session = serde_json::from_str(&data)?;
     let mut guard = state.session.lock().unwrap();
@@ -223,12 +224,11 @@ pub fn get_cached_channels(state: tauri::State<'_, AppState>) -> Vec<Channel> {
 #[tauri::command]
 pub fn get_cached_posts(
     channel_id: String,
-    state: tauri::State<'_, AppState>
+    state: tauri::State<'_, AppState>,
 ) -> Result<String, AppError> {
     let cache_path = state.cache_dir.join("chat").join(&channel_id);
     Ok(std::fs::read_to_string(&cache_path)?)
 }
-
 
 #[tauri::command]
 pub async fn view_channel(
@@ -339,15 +339,15 @@ pub async fn get_posts(
         params.push(("before", id.as_str()));
     }
 
-    let raw_list : serde_json::Value = client
-    .query(
-        "GET",
-        &format!("channels/{channel_id}/posts"),
-        Some(&params),
-        None,
-    )
-    .await?;
-    let list : PostList = serde_json::from_value(raw_list)?;
+    let raw_list: serde_json::Value = client
+        .query(
+            "GET",
+            &format!("channels/{channel_id}/posts"),
+            Some(&params),
+            None,
+        )
+        .await?;
+    let list: PostList = serde_json::from_value(raw_list)?;
 
     // 'order' -> from new to old
     let posts = list
@@ -356,11 +356,10 @@ pub async fn get_posts(
         .rev()
         .filter_map(|id| list.posts.get(id).cloned())
         .collect();
-    
 
     if before.is_none() {
         let chat_path = state.cache_dir.join("chat").join(&channel_id);
-        if let Ok(post_serialized) = serde_json::to_string(&posts){
+        if let Ok(post_serialized) = serde_json::to_string(&posts) {
             atomic_file_write(&chat_path, &post_serialized);
         }
     }

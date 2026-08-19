@@ -1,8 +1,5 @@
-pub(crate) fn atomic_file_write(
-    path : &std::path::Path,
-    data : &str
-) {
-    let tmp_path = path.with_extension("tmp"); 
+pub(crate) fn atomic_file_write(path: &std::path::Path, data: &str) {
+    let tmp_path = path.with_extension("tmp");
     if std::fs::write(&tmp_path, &data).is_ok() {
         let _ = std::fs::rename(&tmp_path, &path);
     }
@@ -61,7 +58,10 @@ pub async fn get_avatar(
 ) -> Result<String, crate::error::AppError> {
     let session = state.current_session()?;
 
-    let avatar_path = state.cache_dir.join("avatar").join(format!("{user_id}_{}", last_picture_update));
+    let avatar_path = state
+        .cache_dir
+        .join("avatar")
+        .join(format!("{user_id}_{}", last_picture_update));
     if let Ok(cached) = std::fs::read_to_string(&avatar_path) {
         return Ok(cached);
     }

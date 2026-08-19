@@ -18,10 +18,13 @@ use api::*;
 fn sweep_cache(dir: &std::path::Path) {
     if let Ok(iterator) = std::fs::read_dir(dir) {
         for item in iterator.flatten() {
-            if let Ok(last_modified) = item.metadata().and_then(|meta| meta.modified()){
+            if let Ok(last_modified) = item.metadata().and_then(|meta| meta.modified()) {
                 if let Ok(time_from_last_modified) = last_modified.elapsed() {
-                    if time_from_last_modified > std::time::Duration::from_secs(60*60*24*30) {
-                        println!("Removing - {}, it's more than 30 days old", &item.path().display());
+                    if time_from_last_modified > std::time::Duration::from_secs(60 * 60 * 24 * 30) {
+                        println!(
+                            "Removing - {}, it's more than 30 days old",
+                            &item.path().display()
+                        );
                         let _ = std::fs::remove_file(item.path());
                     }
                 }
@@ -54,7 +57,7 @@ pub fn run() {
                 channels: Mutex::new(Vec::new()),
                 ws_task: Mutex::new(None),
                 cache_dir,
-                data_dir
+                data_dir,
             };
             app.manage(state);
             Ok(())
