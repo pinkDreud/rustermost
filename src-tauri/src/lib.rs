@@ -37,6 +37,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let cache_dir = app.path().app_cache_dir()?;
+            let data_dir = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data_dir)?;
             std::fs::create_dir_all(cache_dir.join("emoji"))?;
             std::fs::create_dir_all(cache_dir.join("avatar"))?;
             std::fs::create_dir_all(cache_dir.join("file"))?;
@@ -52,6 +54,7 @@ pub fn run() {
                 channels: Mutex::new(Vec::new()),
                 ws_task: Mutex::new(None),
                 cache_dir,
+                data_dir
             };
             app.manage(state);
             Ok(())
@@ -93,7 +96,8 @@ pub fn run() {
             add_reaction,
             remove_reaction,
             execute_command,
-            get_cached_posts
+            get_cached_posts,
+            restore_session
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

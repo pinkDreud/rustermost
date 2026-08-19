@@ -83,13 +83,9 @@ const composer = $("composer");
 const composerInput = $("composer-input");
 
 // ================= PERSISTENCE =================
-// The Tauri webview keeps localStorage on disk across restarts, so we remember
-// the server URL and the session token here. NOTE: the token is stored in
-// plaintext in the app's webview data — fine for a dev tool, but the proper
-// version would use the OS keychain (see the roadmap).
-// Only the server URL is kept here — it is not sensitive. The token is
-// deliberately NOT stored in localStorage (that would be plaintext on disk);
-// its secure-storage path is wired in separately.
+// Only the server URL lives in localStorage — it is not sensitive. The session
+// token is persisted by the backend (session.json in the app data dir, see
+// capture_session/restore_session in api.rs), never by the webview.
 const URL_KEY = "rustermost.url";
 function saveUrl(url) { try { localStorage.setItem(URL_KEY, url); } catch (_) {} }
 function loadUrl() { try { return localStorage.getItem(URL_KEY) || ""; } catch (_) { return ""; } }
@@ -122,11 +118,22 @@ urlForm.addEventListener("submit", async (e) => {
   }, 2000);
 });
 
-// On startup, prefill the last-used server URL. Secure token restore is added
-// on top of this once the storage mechanism is chosen.
-function tryRestore() {
+// On startup, try to resume the saved session (backend reads session.json and
+// rebuilds its client). fetch_me is the liveness probe: if the token went
+// stale the whole attempt fails and we fall back to the login screen — the
+// next SSO login overwrites session.json, so a dead file heals itself.
+async function tryRestore() {
   const url = loadUrl();
   if (url) urlInput.value = url;
+  try {
+    const baseUrl = await invoke("restore_session");
+    await invoke("fetch_me");
+    state.baseUrl = baseUrl;
+    setLoginStatus("Session restored. Loading…");
+    await init();
+  } catch (_) {
+    // no saved session, or a stale one — stay on the login screen
+  }
 }
 
 tryRestore();
