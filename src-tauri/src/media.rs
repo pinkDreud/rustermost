@@ -1,3 +1,14 @@
+
+fn atomic_file_write(
+    path : &std::path::Path,
+    data : &str
+) {
+    let tmp_path = path.with_extension("tmp"); 
+    if std::fs::write(&tmp_path, &data).is_ok() {
+        let _ = std::fs::rename(&tmp_path, &path);
+    }
+}
+
 #[tauri::command]
 pub async fn get_file_thumbnail(
     file_id: String,
@@ -5,6 +16,10 @@ pub async fn get_file_thumbnail(
 ) -> Result<String, crate::error::AppError> {
     let session = state.current_session()?;
 
+    let thumbnail_path = state.cache_dir.join("file").join(&file_id);
+    if let Ok(cached) = std::fs::read_to_string(&thumbnail_path) {
+        return Ok(cached);
+    }
     let url = format!("{}/api/v4/files/{}/thumbnail", session.base_url, file_id);
 
     let client = reqwest::Client::new();
@@ -14,7 +29,9 @@ pub async fn get_file_thumbnail(
 
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("data:image/jpeg;base64,{}", b64))
+    let file_data = format!("data:image/jpeg;base64,{}", b64);
+    atomic_file_write(&thumbnail_path, &file_data);
+    Ok(file_data)
 }
 
 #[tauri::command]
@@ -62,7 +79,7 @@ pub async fn get_avatar(
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let avatar_data = format!("data:image/png;base64,{}", b64);
-    let _ = std::fs::write(&avatar_path, &avatar_data);
+    atomic_file_write(&avatar_path, &avatar_data);
     Ok(avatar_data)
 }
 
@@ -113,7 +130,7 @@ pub async fn get_emoji_image(
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     let emoji_data = format!("data:{};base64,{}", mime, b64);
-    let _ = std::fs::write(&emoji_path, &emoji_data);
+    atomic_file_write(&emoji_path, &emoji_data);
     Ok(emoji_data)
 }
 
