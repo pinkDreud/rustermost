@@ -1,33 +1,29 @@
 // rustermost — frontend logic.
 //
-// Talks ONLY to the existing Rust commands (no backend changes required to run):
-//   open_sso_window, capture_session, fetch_me, fetch_all_channels,
-//   get_posts, send_message, connect_websocket
-// plus the "mm-post" event from the WebSocket task.
+// Talks ONLY to registered Tauri commands (see generate_handler! in
+// src-tauri/src/lib.rs) plus the "mm-*" events from the WebSocket task.
+//
+// Display settings (font size / theme / density) are frontend-only: saved in
+// localStorage and applied as a CSS variable + data-attributes on <html>.
+// First paint is covered by the inline script in index.html (see SETTINGS).
 //
 // FORWARD-COMPATIBLE HOOKS (light up automatically when you add the backend bits):
 //   1. Channel.last_post_at (i64) — if present on a channel, the sidebar sorts
 //      by it (most recent conversation first). Until then it falls back to
 //      live activity learned during the session, then to the server's order.
-//   2. get_users_by_ids(ids) command — if present, it resolves user_id -> username,
-//      which fills in:
-//        - the name of 1:1 direct messages (their display_name is empty),
-//        - the author label on history bubbles,
-//        - searching direct messages by person name.
-//      Until then those degrade gracefully (anonymous "Direct message", no author
-//      label on history), and the command is probed once and then left alone.
-//   3. fetch_all_channels_with_members + view_channel commands — unread badges
-//      are seeded from the server's read-state (total_msg_count - member.msg_count)
-//      and reads are reported back so other devices clear their badges too.
-//      Falls back to fetch_all_channels and session-local badges.
-//   4. "mm-viewed" event — once the WS loop forwards channel_viewed, channels
+//   2. "mm-viewed" event — once the WS loop forwards channel_viewed, channels
 //      read on my other devices clear their badge here live.
-//   5. get_file_info / get_file_thumbnail / get_file commands — attachments on
-//      posts (Post.file_ids) render as inline images (click = full view) or
-//      file chips. Until then attachments show as a plain "📎 attachment" tag.
-//   6. upload_file command (+ send_message accepting file_ids) — the 📎 button
-//      and pasted images actually send. Until then attaching shows an error
-//      chip and the message text is preserved.
+//
+// GRACEFUL-DEGRADATION FALLBACKS (these commands are shipped now; the probes
+// stay so the frontend still runs against an older backend):
+//   - get_users_by_ids — names 1:1 DMs, labels history authors, lets search
+//     match people's real names. Without it: anonymous "Direct message".
+//   - fetch_all_channels_with_members + view_channel — server-synced unread
+//     badges. Without them: fetch_all_channels and session-local badges.
+//   - get_file_info / get_file_thumbnail / get_file — attachment rendering.
+//     Without them: a plain "📎 attachment" tag.
+//   - upload_file — the 📎 button and pasted images. Without it: an error chip,
+//     message text preserved.
 
 import { EMOJI } from "./emoji-data.js";
 
@@ -65,6 +61,9 @@ const PAGE_SIZE = 30; // matches the backend's per_page
 
 // ---------- element refs ----------
 const $ = (id) => document.getElementById(id);
+// Own-property lookup that ignores Object.prototype — for tables indexed by
+// server- or user-supplied names (":constructor:" must not match anything).
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 const loginView = $("login-view");
 const appView = $("app-view");
 const urlForm = $("url-form");
@@ -83,12 +82,69 @@ const composer = $("composer");
 const composerInput = $("composer-input");
 
 // ================= PERSISTENCE =================
-// Only the server URL lives in localStorage — it is not sensitive. The session
-// token is persisted by the backend (session.json in the app data dir, see
+// The webview persists only non-sensitive UI state in localStorage: the server
+// URL (here) and the display settings (see SETTINGS below). The session token
+// is persisted by the backend (session.json in the app data dir, see
 // capture_session/restore_session in api.rs), never by the webview.
 const URL_KEY = "rustermost.url";
 function saveUrl(url) { try { localStorage.setItem(URL_KEY, url); } catch (_) {} }
 function loadUrl() { try { return localStorage.getItem(URL_KEY) || ""; } catch (_) { return ""; } }
+
+// ================= SETTINGS =================
+// Display preferences (font size, theme, density). Not sensitive → localStorage,
+// same as the server URL. Applied by setting a CSS variable / data-attributes on
+// <html>; styles.css does the rest. The first paint is handled by the inline
+// script in index.html (this module is deferred, too late to prevent a flash);
+// this copy owns everything after that: live changes and OS theme tracking.
+const SETTINGS_KEY = "rustermost.settings";
+const SETTINGS_DEFAULTS = { fontSize: "medium", theme: "dark", density: "comfortable" };
+const SETTINGS_VALUES = {
+  fontSize: ["small", "medium", "large"],
+  theme: ["dark", "light", "system"],
+  density: ["comfortable", "compact"],
+};
+// Must stay in sync with the inline script in index.html; "medium" must also
+// match the fallback in styles.css (html { font-size: var(--app-font-size, 14px) }).
+const FONT_SIZES = { small: "13px", medium: "14px", large: "16px" };
+
+// Saved settings merged over the defaults; unknown values fall back to default
+// (protects against a hand-edited or stale localStorage entry).
+function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}; } catch (_) {}
+  const s = { ...SETTINGS_DEFAULTS };
+  for (const key of Object.keys(SETTINGS_VALUES)) {
+    if (SETTINGS_VALUES[key].includes(saved[key])) s[key] = saved[key];
+  }
+  return s;
+}
+
+const settings = loadSettings();
+
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
+}
+
+// "system" resolves against the OS preference; the app's own default is dark,
+// so no preference (or no matchMedia) means dark.
+const lightQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
+
+function applySettings() {
+  const root = document.documentElement;
+  root.style.setProperty("--app-font-size", FONT_SIZES[settings.fontSize]);
+  const theme = settings.theme === "system" ? (lightQuery && lightQuery.matches ? "light" : "dark") : settings.theme;
+  root.dataset.theme = theme;
+  root.dataset.density = settings.density;
+}
+
+// Follow live OS theme changes while set to "system". Older WebKit only has
+// the legacy addListener; and some engines (WebKitGTK) don't reliably deliver
+// the change event at all, so window-focus also re-applies as a catch-up.
+const onSchemeChange = () => { if (settings.theme === "system") applySettings(); };
+if (lightQuery && lightQuery.addEventListener) lightQuery.addEventListener("change", onSchemeChange);
+else if (lightQuery && lightQuery.addListener) lightQuery.addListener(onSchemeChange);
+
+applySettings();
 
 // ================= LOGIN =================
 urlForm.addEventListener("submit", async (e) => {
@@ -434,7 +490,7 @@ function sectionEl(title, items, forceOpen) {
 
 function channelItemEl(ch) {
   const name = displayName(ch);
-  const dm = ch.type === "D" || ch.type === "G";
+  const dm = isDM(ch);
   const row = document.createElement("div");
   row.className = "channel-item" + (ch.id === state.activeId ? " active" : "");
   row.addEventListener("click", () => openChannel(ch.id));
@@ -599,6 +655,9 @@ function renderMessages(posts) {
 // real image once get_avatar resolves. Every avatar for the same user carries
 // a data-uid so we can fill them all in when the image arrives.
 function paintAvatar(el, dataUrl) {
+  // Defensive: only a well-formed image data URL may be interpolated into an
+  // inline style — anything else could smuggle extra CSS declarations in.
+  if (!/^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]*$/i.test(dataUrl)) return;
   el.style.backgroundImage = `url("${dataUrl}")`;
   el.style.backgroundColor = "transparent";
   // Inline so it wins over any `background:` shorthand on the element (the
@@ -645,10 +704,12 @@ async function ensureAvatar(uid) {
     });
     if (dataUrl) {
       state.avatars[uid] = dataUrl;
-      for (const el of document.querySelectorAll(`[data-uid="${uid}"]`)) paintAvatar(el, dataUrl);
+      for (const el of document.querySelectorAll(`[data-uid="${CSS.escape(uid)}"]`)) paintAvatar(el, dataUrl);
     }
-  } catch (_) {
-    state.avatarLookupEnabled = false; // command not registered yet
+  } catch (e) {
+    // Only a missing command disables the feature for the session; any other
+    // failure (network blip, deactivated user) just skips this uid.
+    if (/not found|not allowed/i.test(String(e))) state.avatarLookupEnabled = false;
   } finally {
     state.avatarPending.delete(uid);
   }
@@ -679,7 +740,7 @@ async function ensureEmojiImage(id) {
     const dataUrl = await invoke("get_emoji_image", { emojiId: id });
     if (dataUrl) {
       state.emojiImages[id] = dataUrl;
-      for (const el of document.querySelectorAll(`img[data-emoji-id="${id}"]`)) el.src = dataUrl;
+      for (const el of document.querySelectorAll(`img[data-emoji-id="${CSS.escape(id)}"]`)) el.src = dataUrl;
     }
   } catch (e) {
     console.warn("get_emoji_image failed for", id, e);
@@ -690,8 +751,8 @@ async function ensureEmojiImage(id) {
 
 // DOM node for :name:, or null when the code is unknown (caller keeps the text).
 function emojiNode(name) {
-  if (EMOJI[name]) return document.createTextNode(EMOJI[name]);
-  const id = state.customEmojis[name];
+  if (hasOwn(EMOJI, name)) return document.createTextNode(EMOJI[name]);
+  const id = hasOwn(state.customEmojis, name) ? state.customEmojis[name] : null;
   if (id) {
     const img = document.createElement("img");
     img.className = "emoji";
@@ -713,9 +774,14 @@ function emojiNode(name) {
 // plain text.
 
 // Open in the system browser via the opener plugin; never navigate the webview.
+// Only http(s) may leave the app — the markdown regexes already guarantee that
+// today, but this must not depend on every future call site remembering it
+// (file:/smb: handed to the OS opener is how credential-leak tricks work).
 async function openExternal(url) {
   try {
-    await window.__TAURI__.opener.openUrl(url);
+    const u = new URL(url);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return;
+    await window.__TAURI__.opener.openUrl(u.href);
   } catch (e) {
     console.warn("opener failed for", url, e);
   }
@@ -729,6 +795,12 @@ function linkEl(href, label) {
   a.addEventListener("click", (e) => {
     e.preventDefault();
     openExternal(href);
+  });
+  // Middle-click would otherwise navigate the webview itself to the URL —
+  // a full-window page with no address bar is a phishing surface.
+  a.addEventListener("auxclick", (e) => {
+    e.preventDefault();
+    if (e.button === 1) openExternal(href);
   });
   return a;
 }
@@ -943,7 +1015,7 @@ function applyReaction(postId, name, userId, add) {
   const set = (map[name] = map[name] || new Set());
   if (add) set.add(userId);
   else set.delete(userId);
-  for (const el of document.querySelectorAll(`.reactions[data-post-id="${postId}"]`)) {
+  for (const el of document.querySelectorAll(`.reactions[data-post-id="${CSS.escape(postId)}"]`)) {
     renderReactionsInto(el, postId);
   }
 }
@@ -995,6 +1067,30 @@ const reactionPicker = document.createElement("div");
 reactionPicker.className = "reaction-picker hidden";
 document.body.appendChild(reactionPicker);
 
+// One row of an emoji list — glyph (unicode char or custom-emoji image) plus
+// the :name: label. Shared by the reaction picker and the composer autocomplete.
+function emojiRowEl(c, selected) {
+  const row = document.createElement("div");
+  row.className = "emoji-row" + (selected ? " sel" : "");
+  const glyph = document.createElement("span");
+  glyph.className = "glyph";
+  if (c.ch) {
+    glyph.textContent = c.ch;
+  } else {
+    const img = document.createElement("img");
+    img.className = "emoji";
+    img.dataset.emojiId = c.id;
+    if (state.emojiImages[c.id]) img.src = state.emojiImages[c.id];
+    else ensureEmojiImage(c.id);
+    glyph.appendChild(img);
+  }
+  const label = document.createElement("span");
+  label.textContent = `:${c.name}:`;
+  row.appendChild(glyph);
+  row.appendChild(label);
+  return row;
+}
+
 function openReactionPicker(postId, anchor) {
   reactionPicker.innerHTML = "";
   const input = document.createElement("input");
@@ -1006,24 +1102,7 @@ function openReactionPicker(postId, anchor) {
   const refresh = () => {
     list.innerHTML = "";
     for (const c of emojiCandidates(input.value.trim().toLowerCase())) {
-      const row = document.createElement("div");
-      row.className = "emoji-row";
-      const glyph = document.createElement("span");
-      glyph.className = "glyph";
-      if (c.ch) {
-        glyph.textContent = c.ch;
-      } else {
-        const img = document.createElement("img");
-        img.className = "emoji";
-        img.dataset.emojiId = c.id;
-        if (state.emojiImages[c.id]) img.src = state.emojiImages[c.id];
-        else ensureEmojiImage(c.id);
-        glyph.appendChild(img);
-      }
-      const label = document.createElement("span");
-      label.textContent = `:${c.name}:`;
-      row.appendChild(glyph);
-      row.appendChild(label);
+      const row = emojiRowEl(c, false);
       row.addEventListener("mousedown", (ev) => {
         ev.preventDefault();
         toggleReaction(postId, c.name);
@@ -1177,8 +1256,11 @@ function onIncoming(event) {
   }
 
   if (p.channel_id === state.activeId) {
-    // drop the "No messages yet." placeholder if present
-    if (messagesEl.querySelector(".loading")) messagesEl.innerHTML = "";
+    // Drop the "No messages yet." / "Loading messages…" placeholder if present.
+    // Only that node — .top-loading is the loadOlder spinner sitting above real
+    // bubbles, and wiping innerHTML here would destroy the whole conversation.
+    const placeholder = messagesEl.querySelector(".loading:not(.top-loading)");
+    if (placeholder) placeholder.remove();
     // live events carry the username but not the user_id — resolve it if we can
     const uid = mine ? state.me?.id : state.usersByName[senderClean]?.id;
     messagesEl.appendChild(
@@ -1191,7 +1273,7 @@ function onIncoming(event) {
       // open but not looking — badge it; cleared when the window regains focus
       state.unread[p.channel_id] = (state.unread[p.channel_id] || 0) + 1;
     }
-  } else {
+  } else if (!mine) {
     state.unread[p.channel_id] = (state.unread[p.channel_id] || 0) + 1;
   }
   renderSidebar();
@@ -1249,24 +1331,7 @@ function renderEmojiPopup() {
   emojiPopup.innerHTML = "";
   emojiPopup.classList.toggle("hidden", emojiCands.length === 0);
   emojiCands.forEach((c, i) => {
-    const row = document.createElement("div");
-    row.className = "emoji-row" + (i === emojiSel ? " sel" : "");
-    const glyph = document.createElement("span");
-    glyph.className = "glyph";
-    if (c.ch) {
-      glyph.textContent = c.ch;
-    } else {
-      const img = document.createElement("img");
-      img.className = "emoji";
-      img.dataset.emojiId = c.id;
-      if (state.emojiImages[c.id]) img.src = state.emojiImages[c.id];
-      else ensureEmojiImage(c.id);
-      glyph.appendChild(img);
-    }
-    const label = document.createElement("span");
-    label.textContent = `:${c.name}:`;
-    row.appendChild(glyph);
-    row.appendChild(label);
+    const row = emojiRowEl(c, i === emojiSel);
     row.addEventListener("mousedown", (e) => { e.preventDefault(); applyEmoji(c); });
     emojiPopup.appendChild(row);
   });
@@ -1318,8 +1383,10 @@ messagesEl.addEventListener("scroll", () => {
   if (messagesEl.scrollTop < 80) loadOlder();
 });
 
-// Coming back to the window means reading the open conversation.
+// Coming back to the window means reading the open conversation. Also a cheap
+// moment to catch an OS theme flip the change event didn't deliver.
 window.addEventListener("focus", () => {
+  onSchemeChange();
   if (!state.activeId) return;
   markViewed(state.activeId);
   renderSidebar();
@@ -1567,7 +1634,7 @@ async function doSearch(term) {
     chatError.textContent = "";
   } catch (_) {
     peopleResults.innerHTML = "";
-    chatError.textContent = "Backend: manca il comando search_users.";
+    chatError.textContent = "Backend: the search_users command is missing.";
   }
 }
 
@@ -1632,7 +1699,7 @@ chatCreate.addEventListener("click", async () => {
     const ch = await invoke("create_chat", { userIds: ids });
     onChannelCreated(ch);
   } catch (e) {
-    chatError.textContent = "Impossibile creare la chat: " + e;
+    chatError.textContent = "Couldn't create the chat: " + e;
     chatCreate.disabled = false;
   }
 });
@@ -1680,16 +1747,67 @@ channelCreate.addEventListener("click", async () => {
     });
     onChannelCreated(ch);
   } catch (e) {
-    channelError.textContent = "Impossibile creare il canale: " + e;
+    channelError.textContent = "Couldn't create the channel: " + e;
     channelCreate.disabled = false;
   }
 });
 
 // Shared: a channel was just created → add it, open it, close the modal.
 function onChannelCreated(ch) {
-  if (!ch || !ch.id) { chatError.textContent = "Risposta inattesa dal backend."; return; }
+  if (!ch || !ch.id) { chatError.textContent = "Unexpected response from the backend."; return; }
   if (!state.channels.find((c) => c.id === ch.id)) state.channels.push(ch);
   closeModal();
   renderSidebar();
   openChannel(ch.id);
 }
+
+// ================= SETTINGS MODAL =================
+// Each .option-seg is a segmented control bound to one settings key via
+// data-setting / data-value; clicking saves and applies immediately.
+const settingsBtn = $("settings-btn");
+const settingsOverlay = $("settings-overlay");
+const settingsClose = $("settings-close");
+
+function renderSettingsControls() {
+  for (const seg of settingsOverlay.querySelectorAll(".option-seg")) {
+    const key = seg.dataset.setting;
+    for (const btn of seg.querySelectorAll(".seg-btn")) {
+      const active = btn.dataset.value === settings[key];
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", String(active));
+    }
+  }
+}
+
+function openSettings() {
+  renderSettingsControls();
+  settingsOverlay.classList.remove("hidden");
+}
+function closeSettings() {
+  settingsOverlay.classList.add("hidden");
+}
+
+settingsBtn.addEventListener("click", openSettings);
+settingsClose.addEventListener("click", closeSettings);
+settingsOverlay.addEventListener("click", (e) => {
+  if (e.target === settingsOverlay) closeSettings();
+});
+
+// One delegated listener; the handler resolves which segment was hit.
+settingsOverlay.addEventListener("click", (e) => {
+  const btn = e.target.closest(".option-seg .seg-btn");
+  if (!btn) return;
+  const key = btn.closest(".option-seg").dataset.setting;
+  if (!hasOwn(SETTINGS_VALUES, key) || !SETTINGS_VALUES[key].includes(btn.dataset.value)) return;
+  settings[key] = btn.dataset.value;
+  saveSettings();
+  applySettings();
+  renderSettingsControls();
+});
+
+// Escape closes whichever modal is open (the lightbox handles its own).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!settingsOverlay.classList.contains("hidden")) closeSettings();
+  else if (!modalOverlay.classList.contains("hidden")) closeModal();
+});

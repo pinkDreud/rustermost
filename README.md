@@ -32,6 +32,7 @@ rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed 
 - **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), and the server's custom emoji rendered inline.
 - **Reactions** — react to any message from a searchable emoji picker; counts update live across clients and devices.
 - **Slash commands** — `/away`, `/shrug`, custom integrations — executed for real, with ephemeral replies rendered in-chat as "only visible to you" bubbles.
+- **Display settings** — a ⚙ panel for font size (small/medium/large), theme (dark/light/system, following the OS live), and message density (comfortable/compact); applied instantly and remembered between launches.
 
 ## Installation
 
