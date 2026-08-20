@@ -95,6 +95,24 @@ The first build compiles several hundred crates and takes a few minutes; later b
 
 > Development notes, gotchas, and troubleshooting are in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
+### App icon on Linux
+
+A locally built rustermost shows a generic window icon on Linux. That is not a
+missing asset: under Wayland a client cannot set its own icon at all — the
+compositor matches the window's `app_id` (here: the binary name, `rustermost`)
+against an installed `.desktop` file and uses that file's `Icon=`. The
+`.deb`/`.rpm`/AppImage bundles install one for you; a `cargo tauri dev` or
+`cargo tauri build` binary has none. Install it once:
+
+```sh
+packaging/linux/install.sh          # or: packaging/linux/install.sh /path/to/binary
+```
+
+That drops a desktop entry in `~/.local/share/applications/` and the icons in
+`~/.local/share/icons/hicolor/`. Restart the app — the icon is resolved when the
+window is created, so a running instance keeps the old one.
+
+
 ## Try it / share it with testers
 
 To let colleagues try rustermost **without installing Rust or any toolchain**, build a packaged app and hand them the result. Builds are **per-platform** (a Windows build must be made on Windows, a macOS build on a Mac, …). On the build machine (which does need the prerequisites above), from the project root:

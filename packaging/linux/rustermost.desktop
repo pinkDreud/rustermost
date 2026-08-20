@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=rustermost
+Comment=A lightweight, WhatsApp-style alternative desktop client for Mattermost
+Exec=rustermost
+Icon=rustermost
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupWMClass=rustermost
