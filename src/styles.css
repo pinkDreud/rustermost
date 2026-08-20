@@ -237,6 +237,12 @@ button {
   font-weight: 600;
 }
 .section.sub .channel-item { padding-left: 24px; }
+/* Silenced: dimmed, and the unread count is replaced by a quiet marker. */
+.channel-item.muted .item-name,
+.channel-item.muted .item-sub,
+.channel-item.muted .item-avatar { opacity: 0.5; }
+.item-muted { font-size: 0.86rem; opacity: 0.65; flex: none; }
+
 .channel-item {
   display: flex;
   align-items: center;
@@ -282,9 +288,15 @@ button {
   padding: 14px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-1);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
+.chat-heading { flex: 1; min-width: 0; }
 .chat-title { font-weight: 700; font-size: 1.14rem; }
 .chat-sub { font-size: 0.86rem; color: var(--text-faint); margin-top: 2px; }
+.mute-btn { font-size: 1.07rem; flex: none; }
+.mute-btn.muted { background: var(--accent-dim); }
 
 .messages {
   flex: 1;
@@ -682,6 +694,27 @@ img.emoji {
   outline: none;
 }
 .reaction-picker-list { max-height: 240px; overflow-y: auto; }
+
+/* ---------- right-click menu (sidebar rows) ---------- */
+.context-menu {
+  position: fixed;
+  min-width: 210px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  z-index: 60;
+  overflow: hidden;
+  padding: 4px;
+}
+.context-menu-row {
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 0.93rem;
+  cursor: pointer;
+  user-select: none;
+}
+.context-menu-row:hover { background: var(--bg-3); }
 
 /* ---------- ephemeral (slash command replies) ---------- */
 .ephemeral {

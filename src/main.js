@@ -80,6 +80,7 @@ const emptyState = $("empty-state");
 const chatPanel = $("chat-panel");
 const chatTitle = $("chat-title");
 const chatSub = $("chat-sub");
+const muteBtn = $("mute-btn");
 const messagesEl = $("messages");
 const composer = $("composer");
 const composerInput = $("composer-input");
@@ -123,6 +124,32 @@ function loadSettings() {
 }
 
 const settings = loadSettings();
+
+// ---------- silenced conversations ----------
+// Silencing is local to this client for now: no desktop notification, no
+// unread badge, dimmed row. Reads and writes go through these four helpers on
+// purpose — swapping localStorage for Mattermost's own mute (a channel
+// member's notify_props.mark_unread = "mention", which would sync to the
+// phone and the official app) then touches nothing else in the file.
+const MUTED_KEY = "rustermost.muted";
+function loadMuted() {
+  try {
+    const ids = JSON.parse(localStorage.getItem(MUTED_KEY));
+    return new Set(Array.isArray(ids) ? ids : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+// A Set (not an object) so a channel id can never collide with Object.prototype.
+const mutedIds = loadMuted();
+function isMuted(channelId) {
+  return mutedIds.has(channelId);
+}
+function setMuted(channelId, muted) {
+  if (muted) mutedIds.add(channelId);
+  else mutedIds.delete(channelId);
+  try { localStorage.setItem(MUTED_KEY, JSON.stringify([...mutedIds])); } catch (_) {}
+}
 
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
@@ -435,7 +462,9 @@ function renderSidebar() {
   const q = (searchInput.value || "").toLowerCase();
   const match = (ch) => searchText(ch).includes(q);
 
-  const unread = state.channels.filter((c) => (state.unread[c.id] || 0) > 0 && match(c));
+  // Silenced conversations never reach the pinned Unread section — that is
+  // the whole point of silencing them. They still show in their own section.
+  const unread = state.channels.filter((c) => (state.unread[c.id] || 0) > 0 && !isMuted(c.id) && match(c));
   const direct = state.channels.filter((c) => c.type === "D" && match(c));
   const groups = state.channels.filter((c) => c.type === "G" && match(c));
   const community = state.channels.filter((c) => (c.type === "O" || c.type === "P") && match(c));
@@ -551,9 +580,14 @@ function groupByTeam(items) {
 function channelItemEl(ch) {
   const name = displayName(ch);
   const dm = isDM(ch);
+  const muted = isMuted(ch.id);
   const row = document.createElement("div");
-  row.className = "channel-item" + (ch.id === state.activeId ? " active" : "");
+  row.className = "channel-item" + (ch.id === state.activeId ? " active" : "") + (muted ? " muted" : "");
   row.addEventListener("click", () => openChannel(ch.id));
+  row.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openChannelMenu(ch, e.clientX, e.clientY);
+  });
 
   const av = document.createElement("div");
   av.className = "item-avatar" + (dm ? " dm" : "");
@@ -577,13 +611,65 @@ function channelItemEl(ch) {
   row.appendChild(main);
 
   const unread = state.unread[ch.id] || 0;
-  if (unread > 0) {
+  if (muted) {
+    // Silenced: no count, just a marker — the badge would be shouting.
+    const bell = document.createElement("div");
+    bell.className = "item-muted";
+    bell.textContent = "🔕";
+    bell.title = "Silenced";
+    row.appendChild(bell);
+  } else if (unread > 0) {
     const b = document.createElement("div");
     b.className = "badge";
     b.textContent = unread > 99 ? "99+" : String(unread);
     row.appendChild(b);
   }
   return row;
+}
+
+// Right-click menu on a sidebar row. One entry today (silence/unsilence),
+// positioned at the cursor and clamped to the window.
+const channelMenu = document.createElement("div");
+channelMenu.className = "context-menu hidden";
+document.body.appendChild(channelMenu);
+
+function openChannelMenu(ch, x, y) {
+  const muted = isMuted(ch.id);
+  channelMenu.innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "context-menu-row";
+  row.textContent = muted ? "🔔  Unsilence conversation" : "🔕  Silence conversation";
+  row.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    toggleMuted(ch.id);
+    closeChannelMenu();
+  });
+  channelMenu.appendChild(row);
+
+  channelMenu.classList.remove("hidden");
+  const r = channelMenu.getBoundingClientRect(); // measurable now that it is shown
+  channelMenu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
+  channelMenu.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
+}
+
+function closeChannelMenu() {
+  channelMenu.classList.add("hidden");
+}
+
+// Flip the silence flag and refresh whatever is showing it.
+function toggleMuted(channelId) {
+  setMuted(channelId, !isMuted(channelId));
+  renderMuteBtn();
+  renderSidebar();
+}
+
+// The bell in the conversation header, reflecting the open conversation.
+function renderMuteBtn() {
+  const muted = !!state.activeId && isMuted(state.activeId);
+  muteBtn.textContent = muted ? "🔕" : "🔔";
+  muteBtn.classList.toggle("muted", muted);
+  muteBtn.title = muted ? "Unsilence this conversation" : "Silence this conversation";
+  muteBtn.setAttribute("aria-pressed", String(muted));
 }
 
 // ================= CONVERSATION =================
@@ -597,6 +683,7 @@ async function openChannel(id) {
   chatPanel.classList.remove("hidden");
   chatTitle.textContent = displayName(ch);
   chatSub.textContent = subLabel(ch);
+  renderMuteBtn();
   messagesEl.innerHTML = '<div class="loading">Loading messages…</div>';
 
   // reset paging for the newly opened conversation
@@ -1188,7 +1275,18 @@ document.addEventListener("mousedown", (e) => {
   if (!reactionPicker.classList.contains("hidden") && !reactionPicker.contains(e.target)) {
     closeReactionPicker();
   }
+  if (!channelMenu.classList.contains("hidden") && !channelMenu.contains(e.target)) {
+    closeChannelMenu();
+  }
 });
+
+muteBtn.addEventListener("click", () => {
+  if (state.activeId) toggleMuted(state.activeId);
+});
+// The menu is placed at a viewport position, so anything that moves the list
+// out from under it should dismiss it rather than let it float loose.
+channelList.addEventListener("scroll", closeChannelMenu);
+window.addEventListener("blur", closeChannelMenu);
 
 function bubbleEl({ mine, uid, sender, text, ts, files, postId, reactions }) {
   const row = document.createElement("div");
@@ -1303,7 +1401,7 @@ function onIncoming(event) {
   try {
     // "mine" but not sent from this window = me on another device — worth a toast.
     const isOwnEcho = mine && Date.now() - (recentSends[p.channel_id] || 0) < 7000;
-    if (!isOwnEcho && (!document.hasFocus() || p.channel_id !== state.activeId)) {
+    if (!isOwnEcho && !isMuted(p.channel_id) && (!document.hasFocus() || p.channel_id !== state.activeId)) {
       const su = state.usersByName[senderClean];
       const who = (su && realName(su)) || p.sender || "New message";
       const title = ch && !isDM(ch) ? `${who} · ${displayName(ch)}` : who;
@@ -1868,6 +1966,7 @@ settingsOverlay.addEventListener("click", (e) => {
 // Escape closes whichever modal is open (the lightbox handles its own).
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!settingsOverlay.classList.contains("hidden")) closeSettings();
+  if (!channelMenu.classList.contains("hidden")) closeChannelMenu();
+  else if (!settingsOverlay.classList.contains("hidden")) closeSettings();
   else if (!modalOverlay.classList.contains("hidden")) closeModal();
 });
