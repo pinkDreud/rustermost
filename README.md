@@ -31,9 +31,10 @@ rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed 
 - **File & image attachments, both directions** — send via the 📎 button, drag & drop, or pasting a screenshot; received images render as thumbnails with a click-to-zoom lightbox, other files as named chips.
 - **Markdown rendering** — links (opened in the system browser), bold/italic/strikethrough, inline code and fenced code blocks, quotes, and lists — built as DOM nodes, never injected HTML.
 - **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), a 😊 browse-and-search picker next to the 📎, and the server's custom emoji rendered inline.
+- **GIF search** — a GIF button in the composer searches Giphy and queues the pick as a normal attachment, so it uploads to Mattermost as a real file. Bring your own free API key (pasted into ⚙ Settings); without one the picker just says so. Searching talks to Giphy directly from the app, so they see your IP.
 - **Reactions** — react to any message from a searchable emoji picker; counts update live across clients and devices.
 - **Slash commands** — `/away`, `/shrug`, custom integrations — executed for real, with ephemeral replies rendered in-chat as "only visible to you" bubbles.
-- **Display settings** — a ⚙ panel for font size (small/medium/large), theme (dark/light/system, following the OS live), and message density (comfortable/compact); applied instantly and remembered between launches.
+- **Display settings** — a ⚙ panel for font size (small/medium/large), theme (dark/light/system, following the OS live), message density (comfortable/compact), and your Giphy API key; applied instantly and remembered between launches.
 
 ## Installation
 

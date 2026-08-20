@@ -85,6 +85,7 @@
           <form class="composer" id="composer">
             <button type="button" id="attach-btn" class="attach-btn" title="Attach files">📎</button>
             <button type="button" id="emoji-btn" class="attach-btn" title="Emoji">😊</button>
+            <button type="button" id="gif-btn" class="attach-btn gif-btn" title="GIFs">GIF</button>
             <input id="file-input" type="file" multiple class="hidden" />
             <textarea
               id="composer-input"
@@ -165,6 +166,11 @@
               <button class="seg-btn" type="button" data-value="compact">Compact</button>
             </div>
           </div>
+          <div class="setting-row">
+            <div class="modal-label">Giphy API key</div>
+            <input id="giphy-key" class="modal-input" placeholder="Paste a key to enable GIF search" autocomplete="off" spellcheck="false" />
+          </div>
+          <p class="modal-hint">Get a free key at developers.giphy.com. GIF search runs in this app, so Giphy sees your IP address.</p>
           <p class="modal-hint settings-hint">Changes apply immediately and are remembered.</p>
         </div>
       </div>

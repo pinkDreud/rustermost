@@ -101,7 +101,7 @@ function loadUrl() { try { return localStorage.getItem(URL_KEY) || ""; } catch (
 // script in index.html (this module is deferred, too late to prevent a flash);
 // this copy owns everything after that: live changes and OS theme tracking.
 const SETTINGS_KEY = "rustermost.settings";
-const SETTINGS_DEFAULTS = { fontSize: "medium", theme: "dark", density: "comfortable" };
+const SETTINGS_DEFAULTS = { fontSize: "medium", theme: "dark", density: "comfortable", giphyKey: "" };
 const SETTINGS_VALUES = {
   fontSize: ["small", "medium", "large"],
   theme: ["dark", "light", "system"],
@@ -120,6 +120,8 @@ function loadSettings() {
   for (const key of Object.keys(SETTINGS_VALUES)) {
     if (SETTINGS_VALUES[key].includes(saved[key])) s[key] = saved[key];
   }
+  // Free text, so it gets no enum check — just a type check and a trim.
+  if (typeof saved.giphyKey === "string") s.giphyKey = saved.giphyKey.trim();
   return s;
 }
 
@@ -1636,8 +1638,12 @@ function closeEmojiPicker(focusComposer) {
 }
 
 emojiBtn.addEventListener("click", () => {
-  if (emojiPicker.classList.contains("hidden")) openEmojiPicker();
-  else closeEmojiPicker(true);
+  if (emojiPicker.classList.contains("hidden")) {
+    closeGifPicker(false); // the two panels share the same corner
+    openEmojiPicker();
+  } else {
+    closeEmojiPicker(true);
+  }
 });
 emojiPickerInput.addEventListener("input", renderEmojiPicker);
 emojiPickerInput.addEventListener("keydown", (e) => {
@@ -1648,6 +1654,151 @@ emojiPickerInput.addEventListener("keydown", (e) => {
 });
 document.addEventListener("mousedown", (e) => {
   if (!emojiPicker.contains(e.target) && e.target !== emojiBtn) closeEmojiPicker(false);
+});
+
+// ---------- GIF picker (composer) ----------
+// Giphy search, keyed by whatever you pasted into Settings — no API key ships
+// with the app, and the picker says so until one is set. The webview calls
+// api.giphy.com directly (their API answers with `access-control-allow-origin:
+// *`); nothing is proxied through the Rust side, so Giphy sees your IP.
+// A chosen GIF is downloaded here and queued like any other attachment, so it
+// lands in Mattermost as a real uploaded file rather than a hotlink.
+const GIF_LIMIT = 24;
+const GIF_SEARCH_DEBOUNCE = 300;
+
+const gifBtn = $("gif-btn");
+const gifPicker = document.createElement("div");
+gifPicker.className = "gif-picker hidden";
+const gifInput = document.createElement("input");
+gifInput.placeholder = "Search GIFs…";
+const gifGrid = document.createElement("div");
+gifGrid.className = "gif-grid";
+const gifNote = document.createElement("div");
+gifNote.className = "gif-note";
+gifPicker.appendChild(gifInput);
+gifPicker.appendChild(gifGrid);
+gifPicker.appendChild(gifNote);
+composer.appendChild(gifPicker);
+
+let gifTimer = null;
+let gifReqId = 0; // only the newest search may paint (typing races otherwise)
+
+function gifNoteText(text) {
+  gifNote.textContent = text;
+}
+
+// One Giphy endpoint call. `trending` when there is nothing to search for.
+async function giphyFetch(path, params) {
+  const qs = new URLSearchParams({
+    api_key: settings.giphyKey,
+    limit: String(GIF_LIMIT),
+    rating: "g",
+    ...params,
+  });
+  const res = await fetch(`https://api.giphy.com/v1/gifs/${path}?${qs}`);
+  if (res.status === 401 || res.status === 403) throw new Error("Giphy rejected the key — check it in Settings.");
+  if (!res.ok) throw new Error(`Giphy request failed (${res.status}).`);
+  const body = await res.json();
+  return Array.isArray(body.data) ? body.data : [];
+}
+
+// Giphy hands back a bundle of renditions; take the smallest sane one for the
+// grid and a middleweight one for the actual upload (an "original" can be tens
+// of megabytes). Anything not https is ignored rather than put into an <img>.
+function gifUrl(g, keys) {
+  const images = (g && g.images) || {};
+  for (const k of keys) {
+    const url = images[k] && images[k].url;
+    if (typeof url === "string" && url.startsWith("https://")) return url;
+  }
+  return null;
+}
+
+async function renderGifs() {
+  const q = gifInput.value.trim();
+  if (!settings.giphyKey) {
+    gifGrid.innerHTML = "";
+    gifNoteText("Add a Giphy API key in Settings (⚙) to search GIFs.");
+    return;
+  }
+  const mine = ++gifReqId;
+  gifNoteText("Searching…");
+  try {
+    const results = q ? await giphyFetch("search", { q }) : await giphyFetch("trending", {});
+    if (mine !== gifReqId) return; // a newer search already won
+    gifGrid.innerHTML = "";
+    for (const g of results) {
+      const thumb = gifUrl(g, ["fixed_width_small", "preview_gif", "fixed_width"]);
+      if (!thumb) continue;
+      const img = document.createElement("img");
+      img.className = "gif-cell";
+      img.src = thumb;
+      img.loading = "lazy";
+      img.alt = g.title || "GIF";
+      img.title = g.title || "GIF";
+      img.addEventListener("click", () => attachGif(g));
+      gifGrid.appendChild(img);
+    }
+    gifNoteText(gifGrid.childElementCount ? "Powered by GIPHY" : "Nothing found.");
+  } catch (e) {
+    if (mine !== gifReqId) return;
+    gifGrid.innerHTML = "";
+    gifNoteText(String(e.message || e));
+  }
+}
+
+// Download the chosen GIF and queue it with the other pending attachments, so
+// the existing send path uploads it and a caption can still be typed.
+async function attachGif(g) {
+  const url = gifUrl(g, ["downsized_medium", "fixed_height", "original"]);
+  if (!url) return;
+  gifNoteText("Fetching GIF…");
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`download failed (${res.status})`);
+    const blob = await res.blob();
+    pendingFiles.push(new File([blob], `giphy-${g.id || "gif"}.gif`, { type: blob.type || "image/gif" }));
+    renderPendingFiles();
+    closeGifPicker(true);
+  } catch (e) {
+    gifNoteText("Could not fetch that GIF: " + (e.message || e));
+  }
+}
+
+function openGifPicker() {
+  gifInput.value = "";
+  gifPicker.classList.remove("hidden");
+  gifInput.focus();
+  renderGifs();
+}
+
+function closeGifPicker(focusComposer) {
+  if (gifPicker.classList.contains("hidden")) return;
+  gifPicker.classList.add("hidden");
+  gifReqId++; // abandon any in-flight search
+  if (focusComposer) composerInput.focus();
+}
+
+gifBtn.addEventListener("click", () => {
+  if (gifPicker.classList.contains("hidden")) {
+    closeEmojiPicker(false); // the two panels share the same corner
+    openGifPicker();
+  } else {
+    closeGifPicker(true);
+  }
+});
+gifInput.addEventListener("input", () => {
+  clearTimeout(gifTimer);
+  gifTimer = setTimeout(renderGifs, GIF_SEARCH_DEBOUNCE); // don't call Giphy per keystroke
+});
+gifInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeGifPicker(true);
+  }
+});
+document.addEventListener("mousedown", (e) => {
+  if (!gifPicker.contains(e.target) && e.target !== gifBtn) closeGifPicker(false);
 });
 
 // Scroll near the top of the message pane → pull in older history.
@@ -2041,6 +2192,7 @@ const settingsOverlay = $("settings-overlay");
 const settingsClose = $("settings-close");
 
 function renderSettingsControls() {
+  giphyKeyInput.value = settings.giphyKey;
   for (const seg of settingsOverlay.querySelectorAll(".option-seg")) {
     const key = seg.dataset.setting;
     for (const btn of seg.querySelectorAll(".seg-btn")) {
@@ -2058,6 +2210,12 @@ function openSettings() {
 function closeSettings() {
   settingsOverlay.classList.add("hidden");
 }
+
+const giphyKeyInput = $("giphy-key");
+giphyKeyInput.addEventListener("input", () => {
+  settings.giphyKey = giphyKeyInput.value.trim();
+  saveSettings();
+});
 
 settingsBtn.addEventListener("click", openSettings);
 settingsClose.addEventListener("click", closeSettings);
@@ -2081,6 +2239,8 @@ settingsOverlay.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!channelMenu.classList.contains("hidden")) closeChannelMenu();
+  else if (!emojiPicker.classList.contains("hidden")) closeEmojiPicker(true);
+  else if (!gifPicker.classList.contains("hidden")) closeGifPicker(true);
   else if (!settingsOverlay.classList.contains("hidden")) closeSettings();
   else if (!modalOverlay.classList.contains("hidden")) closeModal();
 });
