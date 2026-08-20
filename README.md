@@ -30,7 +30,7 @@ rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed 
 - **Unread tracking synced with the server** — badges are seeded from Mattermost's read-state at startup, a pinned **Unread** section sits on top of the sidebar, and opening a conversation reports the read back so your other devices clear their badges too.
 - **File & image attachments, both directions** — send via the 📎 button, drag & drop, or pasting a screenshot; received images render as thumbnails with a click-to-zoom lightbox, other files as named chips.
 - **Markdown rendering** — links (opened in the system browser), bold/italic/strikethrough, inline code and fenced code blocks, quotes, and lists — built as DOM nodes, never injected HTML.
-- **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), and the server's custom emoji rendered inline.
+- **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), a 😊 browse-and-search picker next to the 📎, and the server's custom emoji rendered inline.
 - **Reactions** — react to any message from a searchable emoji picker; counts update live across clients and devices.
 - **Slash commands** — `/away`, `/shrug`, custom integrations — executed for real, with ephemeral replies rendered in-chat as "only visible to you" bubbles.
 - **Display settings** — a ⚙ panel for font size (small/medium/large), theme (dark/light/system, following the OS live), and message density (comfortable/compact); applied instantly and remembered between launches.

@@ -1536,6 +1536,120 @@ function applyEmoji(cand) {
   autoResize();
 }
 
+// ---------- emoji picker (composer) ----------
+// The ":na…" autocomplete above only helps when you already know the name.
+// This is the browse-and-search half: the 😊 button opens a grid of every
+// shortcode we know — the server's custom emoji first, since those are the
+// ones you cannot type from a keyboard — and clicking one inserts it.
+const EMOJI_PICKER_MAX = 400; // a big server emoji set should not build 5000 nodes
+
+const emojiBtn = $("emoji-btn");
+const emojiPicker = document.createElement("div");
+emojiPicker.className = "emoji-picker hidden";
+const emojiPickerInput = document.createElement("input");
+emojiPickerInput.placeholder = "Search emoji…";
+const emojiPickerGrid = document.createElement("div");
+emojiPickerGrid.className = "emoji-grid";
+emojiPicker.appendChild(emojiPickerInput);
+emojiPicker.appendChild(emojiPickerGrid);
+composer.appendChild(emojiPicker);
+
+// Name matches, prefix hits before substring hits ("smile" lists :smile:
+// before :big_smile:). Unlike emojiCandidates this matches anywhere in the
+// name, because when browsing you rarely know how a code starts.
+function emojiSearch(q) {
+  const all = [
+    ...Object.keys(state.customEmojis).map((name) => ({ name, id: state.customEmojis[name] })),
+    ...Object.keys(EMOJI).map((name) => ({ name, ch: EMOJI[name] })),
+  ];
+  if (!q) return all.slice(0, EMOJI_PICKER_MAX);
+  const starts = [];
+  const contains = [];
+  for (const c of all) {
+    if (c.name.startsWith(q)) starts.push(c);
+    else if (c.name.includes(q)) contains.push(c);
+  }
+  return starts.concat(contains).slice(0, EMOJI_PICKER_MAX);
+}
+
+function renderEmojiPicker() {
+  const q = emojiPickerInput.value.trim().toLowerCase();
+  emojiPickerGrid.innerHTML = "";
+  const found = emojiSearch(q);
+  if (!found.length) {
+    const none = document.createElement("div");
+    none.className = "emoji-grid-empty";
+    none.textContent = "No emoji matches that.";
+    emojiPickerGrid.appendChild(none);
+    return;
+  }
+  for (const c of found) {
+    const cell = document.createElement("button");
+    cell.type = "button";
+    cell.className = "emoji-cell";
+    cell.title = `:${c.name}:`;
+    if (c.ch) {
+      cell.textContent = c.ch;
+    } else {
+      const img = document.createElement("img");
+      img.className = "emoji";
+      img.dataset.emojiId = c.id;
+      if (state.emojiImages[c.id]) img.src = state.emojiImages[c.id];
+      else ensureEmojiImage(c.id); // fills in via the data-emoji-id sweep
+      cell.appendChild(img);
+    }
+    // mousedown, not click: the composer must not lose the caret first.
+    cell.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      insertEmoji(c);
+    });
+    emojiPickerGrid.appendChild(cell);
+  }
+}
+
+// Unicode goes in as the character; a custom emoji has to stay a :code: for
+// the server to resolve it — same split as the autocomplete's applyEmoji.
+function insertEmoji(c) {
+  const insert = c.ch ? c.ch : `:${c.name}:`;
+  const pos = composerInput.selectionStart ?? composerInput.value.length;
+  const before = composerInput.value.slice(0, pos);
+  const after = composerInput.value.slice(pos);
+  composerInput.value = before + insert + after;
+  const caret = pos + insert.length;
+  composerInput.setSelectionRange(caret, caret);
+  autoResize();
+  // Focus stays in the picker so several emoji can be picked in a row; Escape
+  // or a click outside hands it back to the composer.
+}
+
+function openEmojiPicker() {
+  emojiPickerInput.value = "";
+  renderEmojiPicker();
+  emojiPicker.classList.remove("hidden");
+  emojiPickerInput.focus();
+}
+
+function closeEmojiPicker(focusComposer) {
+  if (emojiPicker.classList.contains("hidden")) return;
+  emojiPicker.classList.add("hidden");
+  if (focusComposer) composerInput.focus();
+}
+
+emojiBtn.addEventListener("click", () => {
+  if (emojiPicker.classList.contains("hidden")) openEmojiPicker();
+  else closeEmojiPicker(true);
+});
+emojiPickerInput.addEventListener("input", renderEmojiPicker);
+emojiPickerInput.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.stopPropagation(); // don't also close a modal underneath
+    closeEmojiPicker(true);
+  }
+});
+document.addEventListener("mousedown", (e) => {
+  if (!emojiPicker.contains(e.target) && e.target !== emojiBtn) closeEmojiPicker(false);
+});
+
 // Scroll near the top of the message pane → pull in older history.
 messagesEl.addEventListener("scroll", () => {
   if (messagesEl.scrollTop < 80) loadOlder();

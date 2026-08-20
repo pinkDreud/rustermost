@@ -611,7 +611,7 @@ img.emoji {
 .emoji-popup {
   position: absolute;
   bottom: 100%;
-  left: 52px;
+  left: 88px;
   margin-bottom: 6px;
   min-width: 230px;
   background: var(--bg-2);
@@ -630,6 +630,55 @@ img.emoji {
   font-size: 0.93rem;
   color: var(--text);
 }
+.emoji-picker {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  margin-bottom: 6px;
+  width: 300px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  z-index: 40;
+  overflow: hidden;
+}
+.emoji-picker input {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 0.93rem;
+  outline: none;
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 2px;
+  padding: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.emoji-cell {
+  background: transparent;
+  font-size: 1.29rem;
+  line-height: 1;
+  padding: 4px 0;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.emoji-cell:hover { background: var(--bg-3); }
+.emoji-grid-empty {
+  grid-column: 1 / -1;
+  padding: 10px 4px;
+  color: var(--text-faint);
+  font-size: 0.93rem;
+}
+
 .emoji-row:hover { background: var(--bg-3); }
 .emoji-row.sel { background: var(--accent-dim); }
 .emoji-row .glyph { width: 1.6em; text-align: center; font-size: 1.14rem; line-height: 1; }
