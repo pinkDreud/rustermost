@@ -48,7 +48,10 @@ const state = {
   customEmojis: {}, // emoji name -> emoji id (server-defined custom emoji)
   emojiImages: {}, // emoji id -> data URL
   reactions: {}, // post_id -> { emoji_name -> Set(user_id) }
-  collapsed: {}, // section title -> true when folded
+  // Which sidebar sections are unfolded. A section missing from here is
+  // folded, so the sidebar opens closed; Unread is the exception — it is
+  // pinned on top precisely so new messages are visible without a click.
+  expanded: { Unread: true }, // section title -> true when open
   avatars: {}, // user_id -> data URL (in-memory; the disk cache comes later)
   avatarPending: new Set(), // user_ids currently being fetched
   avatarLookupEnabled: true, // flips off if get_avatar isn't in the backend yet
@@ -454,9 +457,16 @@ function renderSidebar() {
   channelList.appendChild(sectionEl("Community", community, searching));
 }
 
-// While searching, sections are forced open so matches are never hidden.
+// Has the user unfolded this section? (hasOwn: section titles are data, so
+// "constructor" & friends must not read as open.)
+function isOpen(key) {
+  return hasOwn(state.expanded, key) && state.expanded[key];
+}
+
+// Folded unless the user has opened it; while searching, sections are forced
+// open so matches are never hidden.
 function sectionEl(title, items, forceOpen) {
-  const collapsed = !forceOpen && !!state.collapsed[title];
+  const open = forceOpen || isOpen(title);
 
   const wrap = document.createElement("div");
   wrap.className = "section";
@@ -465,18 +475,18 @@ function sectionEl(title, items, forceOpen) {
   h.className = "section-title";
   const chev = document.createElement("span");
   chev.className = "chevron";
-  chev.textContent = collapsed ? "▸" : "▾"; // ▸ / ▾
+  chev.textContent = open ? "▾" : "▸"; // ▾ / ▸
   const label = document.createElement("span");
   label.textContent = `${title} · ${items.length}`;
   h.appendChild(chev);
   h.appendChild(label);
   h.addEventListener("click", () => {
-    state.collapsed[title] = !state.collapsed[title];
+    state.expanded[title] = !isOpen(title);
     renderSidebar();
   });
   wrap.appendChild(h);
 
-  if (collapsed) return wrap;
+  if (!open) return wrap;
 
   if (items.length === 0) {
     const e = document.createElement("div");
