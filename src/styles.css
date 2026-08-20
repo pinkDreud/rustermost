@@ -225,6 +225,18 @@ button {
   color: var(--text-faint);
   transition: transform 0.12s;
 }
+/* Per-team groups nested inside Community: indented, and deliberately not
+   sticky — only the "Community" header above them stays pinned, so the two
+   never fight over top: 0. */
+.section.sub > .section-title {
+  position: static;
+  padding: 7px 16px 4px 30px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: none;
+  font-weight: 600;
+}
+.section.sub .channel-item { padding-left: 24px; }
 .channel-item {
   display: flex;
   align-items: center;

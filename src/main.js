@@ -451,10 +451,10 @@ function renderSidebar() {
   channelList.innerHTML = "";
   // Pinned on top, only while something is actually unread; conversations
   // stay in their own section below as well.
-  if (unread.length) channelList.appendChild(sectionEl("Unread", unread, searching));
-  channelList.appendChild(sectionEl("Direct messages", direct, searching));
-  channelList.appendChild(sectionEl("Groups", groups, searching));
-  channelList.appendChild(sectionEl("Community", community, searching));
+  if (unread.length) channelList.appendChild(sectionEl("Unread", "Unread", unread, searching));
+  channelList.appendChild(sectionEl("Direct messages", "Direct messages", direct, searching));
+  channelList.appendChild(sectionEl("Groups", "Groups", groups, searching));
+  channelList.appendChild(communityEl(community, searching));
 }
 
 // Has the user unfolded this section? (hasOwn: section titles are data, so
@@ -463,28 +463,35 @@ function isOpen(key) {
   return hasOwn(state.expanded, key) && state.expanded[key];
 }
 
-// Folded unless the user has opened it; while searching, sections are forced
-// open so matches are never hidden.
-function sectionEl(title, items, forceOpen) {
-  const open = forceOpen || isOpen(title);
-
-  const wrap = document.createElement("div");
-  wrap.className = "section";
-
+// The clickable "TITLE · N ▾" line that folds a section. `key` is where the
+// fold state lives in state.expanded — for team sub-groups that is "team:<id>",
+// which can never collide with a top-level section title.
+function sectionHeaderEl(key, label, count, open) {
   const h = document.createElement("div");
   h.className = "section-title";
   const chev = document.createElement("span");
   chev.className = "chevron";
   chev.textContent = open ? "▾" : "▸"; // ▾ / ▸
-  const label = document.createElement("span");
-  label.textContent = `${title} · ${items.length}`;
+  const text = document.createElement("span");
+  text.textContent = `${label} · ${count}`;
   h.appendChild(chev);
-  h.appendChild(label);
+  h.appendChild(text);
   h.addEventListener("click", () => {
-    state.expanded[title] = !isOpen(title);
+    state.expanded[key] = !isOpen(key);
     renderSidebar();
   });
-  wrap.appendChild(h);
+  return h;
+}
+
+// Folded unless the user has opened it; while searching, sections are forced
+// open so matches are never hidden. `sub` renders the indented variant used
+// for the per-team groups inside Community.
+function sectionEl(key, label, items, forceOpen, sub) {
+  const open = forceOpen || isOpen(key);
+
+  const wrap = document.createElement("div");
+  wrap.className = sub ? "section sub" : "section";
+  wrap.appendChild(sectionHeaderEl(key, label, items.length, open));
 
   if (!open) return wrap;
 
@@ -496,6 +503,49 @@ function sectionEl(title, items, forceOpen) {
   }
   for (const ch of items) wrap.appendChild(channelItemEl(ch));
   return wrap;
+}
+
+// Community, split into one sub-group per originating team so channels from
+// unrelated teams no longer interleave. The header counts channels (not
+// teams); each team folds on its own.
+function communityEl(items, forceOpen) {
+  const open = forceOpen || isOpen("Community");
+
+  const wrap = document.createElement("div");
+  wrap.className = "section";
+  wrap.appendChild(sectionHeaderEl("Community", "Community", items.length, open));
+
+  if (!open) return wrap;
+
+  const teams = groupByTeam(items);
+  if (teams.length === 0) {
+    const e = document.createElement("div");
+    e.className = "list-empty";
+    e.textContent = "Nothing here.";
+    wrap.appendChild(e);
+  }
+  for (const t of teams) {
+    wrap.appendChild(sectionEl(`team:${t.id}`, t.name, t.items, forceOpen, true));
+  }
+  return wrap;
+}
+
+// Channels bucketed by their team, teams A→Z. A channel whose team name never
+// arrived (fetch_teams degrades silently) lands in "Other", kept last, so it
+// is still reachable.
+const OTHER_TEAM = "Other";
+function groupByTeam(items) {
+  const groups = new Map(); // team_id ("" when unknown) -> { id, name, items }
+  for (const ch of items) {
+    const name = teamName(ch);
+    const id = name ? ch.team_id : "";
+    if (!groups.has(id)) groups.set(id, { id, name: name || OTHER_TEAM, items: [] });
+    groups.get(id).items.push(ch); // input order (by recency) is preserved
+  }
+  return [...groups.values()].sort((a, b) => {
+    if (!a.id !== !b.id) return a.id ? -1 : 1; // "Other" last
+    return a.name.localeCompare(b.name);
+  });
 }
 
 function channelItemEl(ch) {

@@ -19,13 +19,13 @@ rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed 
 ## Features
 
 - **SSO login** via cookie capture — no Personal Access Token required; the server URL is remembered between launches.
-- **Conversation sidebar** grouped into Direct messages, Groups, and Community (public/private channels), each collapsible, ordered by recent activity, with per-conversation unread badges.
+- **Conversation sidebar** grouped into Direct messages, Groups, and Community (public/private channels), each collapsible and folded on launch (except the pinned Unread section), ordered by recent activity, with per-conversation unread badges.
 - **Search** conversations by channel name *and* by people's real names (first/last), not just usernames.
 - **Avatars** shown next to every message; in the sidebar, direct chats show the person's photo and groups/channels an initial.
 - **Real-time messaging** — messages are received live over WebSocket (with auto-reconnect) and sent over REST, with desktop notifications for incoming messages.
 - **Message history** with infinite scroll — older messages load as you scroll back up.
 - **Start new conversations** from inside the app: a direct message or group message by picking people, or a named public/private channel in a team.
-- **Team labels** on Community channels, so same-named channels across teams are easy to tell apart.
+- **Community grouped by team** — Community splits into a collapsible sub-section per originating team, and every channel keeps its team label, so same-named channels across teams are easy to tell apart.
 - **Unread tracking synced with the server** — badges are seeded from Mattermost's read-state at startup, a pinned **Unread** section sits on top of the sidebar, and opening a conversation reports the read back so your other devices clear their badges too.
 - **File & image attachments, both directions** — send via the 📎 button, drag & drop, or pasting a screenshot; received images render as thumbnails with a click-to-zoom lightbox, other files as named chips.
 - **Markdown rendering** — links (opened in the system browser), bold/italic/strikethrough, inline code and fenced code blocks, quotes, and lists — built as DOM nodes, never injected HTML.
