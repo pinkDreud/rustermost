@@ -1197,8 +1197,15 @@ function emojiNode(name) {
 // Minimal chat-flavored markdown, rendered by BUILDING DOM NODES — message
 // content never goes through innerHTML, so it can't inject markup. Supported:
 // [label](url), bare http(s) URLs, **bold**, *italic*/_italic_, ~~strike~~,
-// `code`, ``` fenced blocks ```, > quotes, -/*/1. lists, GFM pipe tables.
-// Everything else is plain text.
+// `code`, ``` fenced blocks ```, > quotes, -/*/+ and 1. lists (nested by
+// indent), - [ ] / - [x] task items, # .. ###### headings, --- / ___ / ***
+// horizontal rules, GFM pipe tables. Everything else is plain text.
+// Headings (#32): the ATX marker #..###### maps to h2..h6 (h(n+1), capped at
+// h6) — h1 is the app's own, nothing in a chat bubble should outrank it; CSS
+// sizes them with rem so they follow --app-font-size and never blow up a
+// bubble. Out of scope on purpose (#32 follow-ups): $..$ LaTeX (needs vendored
+// KaTeX + fonts; stays literal) and fence language highlighting (needs a
+// vendored highlighter; the info string only lands as a `lang-*` class hook).
 
 // Open in the system browser via the opener plugin; never navigate the webview.
 // Only http(s) may leave the app — the markdown regexes already guarantee that
@@ -1283,10 +1290,33 @@ function inlineMd(target, text, depth = 0) {
 
 const FENCE_RE = /^\s*```/;
 const QUOTE_RE = /^>\s?/;
-const UL_RE = /^\s*[-*]\s+/;
-const OL_RE = /^\s*\d+\.\s+/;
+// #32: ATX heading — 1-6 hashes then whitespace, so "#tag" stays plain text.
+const HEADING_RE = /^(#{1,6})\s+/;
+// #32: a line that is ONLY a run of 3+ of the same -, _ or *, optionally
+// spaced ("- - -"). Checked BEFORE lists so "- - -" can't read as a bullet
+// whose text is "- -", and after tables' lookahead consumed a well-formed
+// "|---|" delimiter row — a bare "---" under a non-table pipe line (or any
+// text, GFM-setext style) still becomes a rule, never a heading.
+const HR_RE = /^\s*([*_-])(?:\s*\1){2,}\s*$/;
+// One list item: leading indent, then a bullet (-/*/+) or an ordered "1."
+// marker, then whitespace. The + bullet is Mattermost/markdown-standard (#32).
+const LIST_ITEM_RE = /^(\s*)([-*+]|\d+\.)\s+/;
+// A task item's checkbox marker right after the list marker (#32).
+const CHECK_RE = /^\[([ xX])\]\s+/;
 // One cell of a GFM table delimiter row: ≥3 dashes, optional alignment colons.
 const TABLE_DELIM_CELL_RE = /^:?-{3,}:?$/;
+
+// Leading indent in display columns (a tab is 4) — nesting is relative, so a
+// tab-indented sub-item nests exactly like a 4-space one.
+function indentOf(line) {
+  let n = 0;
+  for (const ch of line) {
+    if (ch === " ") n++;
+    else if (ch === "\t") n += 4;
+    else break;
+  }
+  return n;
+}
 
 // A table row's cells, trimmed; surrounding pipes are optional (| a | b | and
 // a | b both split to ["a", "b"]). Escaped pipes are out of scope on purpose.
@@ -1315,11 +1345,74 @@ function tableStartAt(lines, i) {
   return { headers, aligns };
 }
 
+// #32: a (possibly nested) list block, via an indent stack. A line indented
+// ≥2 columns past the frame on top of the stack opens ONE nested list inside
+// that frame's last <li> — 2, 4 or 8 extra spaces all nest a single level
+// (forgiving, like the native client); dedenting below a frame's indent pops
+// it, so "  + sub" then "- item" returns cleanly to the top level. Depth is
+// unbounded and ul/ol mix freely; a switch of kind at the same indent ("-"
+// ↔ "1.") opens a sibling list like GFM. A blank line ends the list unless
+// another item follows further down. Returns { frag, next }.
+function listBlock(lines, startIdx) {
+  const frag = document.createDocumentFragment();
+  const stack = []; // frames { indent, ordered, list, li, parent }, deepest last
+  let i = startIdx;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (HR_RE.test(line)) break; // "- - -" is a rule, not a bullet
+    if (!/\S/.test(line)) {
+      let j = i + 1;
+      while (j < lines.length && !/\S/.test(lines[j])) j++;
+      if (j < lines.length && LIST_ITEM_RE.test(lines[j]) && !HR_RE.test(lines[j])) { i = j; continue; }
+      break;
+    }
+    const m = line.match(LIST_ITEM_RE);
+    if (!m) break;
+    const indent = indentOf(line);
+    const ordered = /^\d/.test(m[2]);
+    while (stack.length && indent < stack[stack.length - 1].indent) stack.pop();
+    let frame = stack[stack.length - 1];
+    if (!frame) {
+      frame = { indent, ordered, li: null, parent: frag };
+      frame.list = document.createElement(ordered ? "ol" : "ul");
+      frag.appendChild(frame.list);
+      stack.push(frame);
+    } else if (indent >= frame.indent + 2 && frame.li) {
+      frame = { indent, ordered, li: null, parent: stack[stack.length - 1].li };
+      frame.list = document.createElement(ordered ? "ol" : "ul");
+      frame.parent.appendChild(frame.list);
+      stack.push(frame);
+    } else if (frame.ordered !== ordered) {
+      frame.list = document.createElement(ordered ? "ol" : "ul");
+      frame.parent.appendChild(frame.list);
+      frame.ordered = ordered;
+    }
+    const li = document.createElement("li");
+    frame.list.appendChild(li);
+    frame.li = li;
+    let content = line.slice(m[0].length);
+    const check = content.match(CHECK_RE);
+    if (check) {
+      // Display-only glyph — the state lives in the source text; there is no
+      // server round-trip to toggle a real checkbox with (#32).
+      li.className = "task";
+      const box = document.createElement("span");
+      box.className = "task-check";
+      box.textContent = check[1] === " " ? "\u2610" : "\u2612"; // ☐ open / ☒ done
+      li.appendChild(box);
+      content = content.slice(check[0].length);
+    }
+    inlineMd(li, content);
+    i++;
+  }
+  return { frag, next: i };
+}
+
 // Detects block starts at lines[i]; tables need the lookahead (a header row
 // alone is just text — the delimiter line below is what makes it a table).
 const startsBlock = (lines, i) =>
-  FENCE_RE.test(lines[i]) || QUOTE_RE.test(lines[i]) || UL_RE.test(lines[i]) ||
-  OL_RE.test(lines[i]) || !!tableStartAt(lines, i);
+  FENCE_RE.test(lines[i]) || QUOTE_RE.test(lines[i]) || HEADING_RE.test(lines[i]) ||
+  HR_RE.test(lines[i]) || LIST_ITEM_RE.test(lines[i]) || !!tableStartAt(lines, i);
 
 function renderMarkdown(text) {
   const frag = document.createDocumentFragment();
@@ -1329,11 +1422,15 @@ function renderMarkdown(text) {
     const line = lines[i];
 
     if (FENCE_RE.test(line)) {
+      // #32: the info string (```bash) only lands as a `lang-*` class hook for
+      // future CSS — actual highlighting needs a vendored lib we don't carry.
+      const lang = /^(\w+)/.exec(line.slice(line.match(FENCE_RE)[0].length).trimStart());
       const buf = [];
       i++;
       while (i < lines.length && !FENCE_RE.test(lines[i])) buf.push(lines[i++]);
       i++; // closing fence (or end of message)
       const pre = document.createElement("pre");
+      if (lang) pre.className = `lang-${lang[1].toLowerCase()}`;
       const code = document.createElement("code");
       code.textContent = buf.join("\n");
       pre.appendChild(code);
@@ -1354,16 +1451,26 @@ function renderMarkdown(text) {
       continue;
     }
 
-    if (UL_RE.test(line) || OL_RE.test(line)) {
-      const itemRe = OL_RE.test(line) ? OL_RE : UL_RE;
-      const list = document.createElement(itemRe === OL_RE ? "ol" : "ul");
-      while (i < lines.length && itemRe.test(lines[i])) {
-        const li = document.createElement("li");
-        inlineMd(li, lines[i].replace(itemRe, ""));
-        list.appendChild(li);
-        i++;
-      }
-      frag.appendChild(list);
+    const hm = HEADING_RE.exec(line);
+    if (hm) {
+      // #32: h(n+1), capped at h6 (h1 stays reserved for the app itself).
+      const h = document.createElement(`h${Math.min(hm[1].length + 1, 6)}`);
+      inlineMd(h, line.slice(hm[0].length));
+      frag.appendChild(h);
+      i++;
+      continue;
+    }
+
+    if (HR_RE.test(line)) { // after tables' lookahead, before lists: see HR_RE
+      frag.appendChild(document.createElement("hr"));
+      i++;
+      continue;
+    }
+
+    if (LIST_ITEM_RE.test(line)) {
+      const { frag: listFrag, next } = listBlock(lines, i);
+      frag.appendChild(listFrag);
+      i = next;
       continue;
     }
 

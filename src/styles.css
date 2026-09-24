@@ -708,6 +708,33 @@ select.modal-input { appearance: none; cursor: pointer; }
   color: var(--text-dim);
 }
 .msg-body ul, .msg-body ol { margin: 4px 0; padding-left: 20px; }
+/* #32: nested lists alternate bullet shapes like the native client and hug
+   their parent item instead of stacking margins. */
+.msg-body li > ul, .msg-body li > ol { margin: 2px 0; }
+.msg-body ul ul { list-style: circle; }
+.msg-body ul ul ul { list-style: square; }
+.msg-body ol ol { list-style: lower-alpha; }
+.msg-body ol ol ol { list-style: lower-roman; }
+/* #32: task items swap the bullet for a checkbox glyph — display-only, the
+   state lives in the source text (no server round-trip exists for it). */
+.msg-body li.task { list-style: none; }
+.msg-body .task-check { margin-right: 6px; color: var(--text-dim); user-select: none; }
+.msg-me .msg-body .task-check { color: inherit; opacity: 0.75; }
+/* #32: chat-sized headings — rem scales them with --app-font-size and the
+   margins stay tight, so a heading line can't blow up a bubble. h2..h6: h1
+   stays reserved for the app itself (mapping documented in main.js). */
+.msg-body h2, .msg-body h3, .msg-body h4, .msg-body h5, .msg-body h6 {
+  margin: 6px 0 2px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+.msg-body h2 { font-size: 1.3rem; }
+.msg-body h3 { font-size: 1.18rem; }
+.msg-body h4 { font-size: 1.06rem; }
+.msg-body h5 { font-size: 1rem; }
+.msg-body h6 { font-size: 0.93rem; color: var(--text-dim); }
+.msg-me .msg-body h6 { color: inherit; opacity: 0.75; }
+.msg-body hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
 /* GFM pipe tables (#13): the wrapper carries the outer frame and scrolls
    horizontally, so a wide table never breaks the bubble; its overflow clips
    the table to the rounded corners. Inner grid lines come from the cells —
