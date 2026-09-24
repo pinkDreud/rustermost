@@ -208,3 +208,43 @@ test("32: a fence info string lands as a lang-* class (no highlighting)", async 
   ok(pre.classList.contains("lang-bash"), "info string stashed for future CSS");
   eq(pre.textContent, "ls -a", "code body untouched");
 });
+
+test("32: a tab indents like 4 spaces (nesting works with tabs)", async () => {
+  const w = await bootWith(post("p1", "- a\n\t- b"));
+
+  const body = bodyOf(w, "p1");
+  const rootUl = body.children.find((el) => el.tagName === "ul");
+  ok(rootUl, "root list rendered");
+  const nested = w.q("ul ul", rootUl);
+  ok(nested, "tab-indented item nests");
+  eq(nested.textContent, "b", "nested item text");
+});
+
+test("32: switching marker kind at the same indent opens a sibling list (ul → ol)", async () => {
+  const w = await bootWith(post("p1", "- a\n1. b"));
+
+  const body = bodyOf(w, "p1");
+  eq(tags(body.children), "ul,ol", "kind switch ends the ul and opens an ol");
+  eq(w.q("ol", body).textContent, "b", "ordered item text");
+});
+
+test("32: two marker chars are NOT a rule (-- stays text, - - stays a bullet)", async () => {
+  const w = await bootWith(post("p1", "-- still text\n- - one bullet"));
+
+  const body = bodyOf(w, "p1");
+  eq(w.qa("hr", body).length, 0, "short marker runs never become rules");
+  ok(body.textContent.includes("-- still text"), "double dash kept verbatim");
+  eq(w.qa("ul", body).length, 1, "spaced single dash is a list, not a rule");
+});
+
+test("32: a root list opened with leading indent stays its own list when a later item dedents past it", async () => {
+  // A root item at indent N opens a root list there; dedenting BELOW that
+  // indent can't merge into it, so a second root list opens (forgiving rule).
+  const w = await bootWith(post("p1", "    - deep\n- top"));
+
+  const body = bodyOf(w, "p1");
+  const rootUls = body.children.filter((el) => el.tagName === "ul"); // direct children only
+  eq(rootUls.length, 2, "two sibling root lists");
+  eq(rootUls[0].textContent, "deep", "indented item first");
+  eq(rootUls[1].textContent, "top", "dedented item gets its own root list");
+});
