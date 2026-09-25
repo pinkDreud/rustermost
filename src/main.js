@@ -1396,8 +1396,10 @@ const HR_RE = /^\s*([*_-])(?:\s*\1){2,}\s*$/;
 const LIST_ITEM_RE = /^(\s*)([-*+]|\d+\.)\s+/;
 // A task item's checkbox marker right after the list marker (#32).
 const CHECK_RE = /^\[([ xX])\]\s+/;
-// One cell of a GFM table delimiter row: ≥3 dashes, optional alignment colons.
-const TABLE_DELIM_CELL_RE = /^:?-{3,}:?$/;
+// One cell of a GFM table delimiter row: GFM allows ONE OR MORE hyphens
+// with optional alignment colons (e.g. "-", "--:"), not the ≥3 a naive
+// reading suggests — matching the native Mattermost client.
+const TABLE_DELIM_CELL_RE = /^:?-+:?$/;
 
 // Leading indent in display columns (a tab is 4) — nesting is relative, so a
 // tab-indented sub-item nests exactly like a 4-space one.

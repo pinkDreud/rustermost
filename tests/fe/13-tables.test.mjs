@@ -144,3 +144,25 @@ test("13: header/delimiter column-count mismatch stays plain text (GFM rule)", a
   ok(!w.q("table", body), "3-cell delimiter under a 2-cell header is not a table");
   ok(body.textContent.includes("|---|---|---|"), "mismatched delimiter kept verbatim");
 });
+
+test("13: short delimiter cells (--:, 1-2 dashes) still open a table (reported case)", async () => {
+  const w = await bootWith(post("p1", "| Nome | Punti |\n| --- | --: |\n| Mastronikolis | 38 |\n| Scheulen | 35 |\n| Zanzottera | 36 |"));
+
+  const table = tableOf(w, "p1");
+  ok(table, "table rendered despite the 2-dash '--:' delimiter cell");
+
+  const ths = w.qa("thead th", table);
+  eq(ths.length, 2, "2 columns");
+  eq(texts(ths), "Nome|Punti", "header texts");
+
+  const rows = w.qa("tbody tr", table);
+  eq(rows.length, 3, "3 data rows");
+  eq(texts(w.qa("td", rows[0])), "Mastronikolis|38", "first body row");
+  eq(texts(w.qa("td", rows[1])), "Scheulen|35", "second body row");
+  eq(texts(w.qa("td", rows[2])), "Zanzottera|36", "third body row");
+
+  ok(ths[1].classList.contains("align-right"), "Punti th carries .align-right (from '--:')");
+  for (const [i, row] of rows.entries()) {
+    ok(w.qa("td", row)[1].classList.contains("align-right"), `Punti td ${i} carries .align-right`);
+  }
+});
