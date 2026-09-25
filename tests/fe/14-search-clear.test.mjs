@@ -84,3 +84,31 @@ test("14: the icon can never disagree with the field across renders", async () =
   unfold(w, "Direct messages");
   ok(!btn.classList.contains("hidden"), "✕ appears after the next renderSidebar");
 });
+
+test("14: Escape empties the search field and keeps focus", async () => {
+  const w = await boot({ channels: CHANNELS, users: USERS, me: ME });
+  const btn = w.el("search-clear-btn");
+  const input = w.el("search-input");
+  const rows = () => w.qa(".channel-item", w.el("channel-list"));
+
+  unfold(w, "Direct messages");
+  unfold(w, "Community");
+  unfold(w, "Other");
+  eq(rows().length, 2, "both conversations listed before searching");
+
+  typeInSearch(w, "town");
+  ok(!btn.classList.contains("hidden"), "✕ appears once there is text");
+  eq(rows().length, 1, "filter narrows the list");
+
+  input.focus(); // Escape arrives while the user is typing in the field
+  w.fire("search-input", "keydown", { key: "Escape" });
+  eq(input.value, "", "Escape clears the field");
+  ok(btn.classList.contains("hidden"), "✕ hides again once the field is empty");
+  eq(rows().length, 2, "filter reset — every conversation listed again");
+  eq(w.document.activeElement, input, "focus stays in the search field");
+
+  w.fire("search-input", "keydown", { key: "Escape" });
+  eq(input.value, "", "second Escape on an empty field is a harmless no-op");
+  eq(rows().length, 2, "list still full");
+  eq(w.document.activeElement, input, "focus still in the field");
+});

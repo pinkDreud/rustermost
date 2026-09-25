@@ -808,12 +808,23 @@ async function resolveUsers(ids) {
 // ================= SIDEBAR =================
 searchInput.addEventListener("input", renderSidebar);
 
-// Round ✕ overlaid on the field's right edge: clears the text, re-runs the
-// exact same filter path as typing, and hands focus back to the input.
-searchClearBtn.addEventListener("click", () => {
+// Clear-and-reset, shared by the ✕ button and Escape so the two can never
+// diverge: empties the field, re-runs the exact same filter path as typing,
+// and leaves focus in the input (a new query can be typed right away).
+function clearSearch() {
   searchInput.value = "";
   renderSidebar();
   searchInput.focus();
+}
+
+// Round ✕ overlaid on the field's right edge.
+searchClearBtn.addEventListener("click", clearSearch);
+
+// Escape is the ✕'s keyboard twin — early-out on an empty field so we don't
+// re-render pointlessly.
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !searchInput.value) return;
+  clearSearch();
 });
 
 function displayName(ch) {
