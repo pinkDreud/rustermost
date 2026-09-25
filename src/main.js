@@ -2492,8 +2492,9 @@ function renderReactionsInto(container, postId) {
     container.appendChild(pill);
   }
   // Marks strips holding real pills. An empty strip is just the hover-revealed
-  // "+"; inside a grouped run (#16) the CSS docks it beside the bubble instead
-  // of letting it stretch the gap between balloons.
+  // "+"; the CSS docks it beside the bubble (gutter on grouped rows, far
+  // corner otherwise) instead of letting it stretch the gap between
+  // balloons (#16).
   container.classList.toggle("with-pills", container.childNodes.length > 0);
   const add = document.createElement("button");
   add.type = "button";

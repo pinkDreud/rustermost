@@ -419,15 +419,23 @@ button {
 .msg-stamp .msg-edited { margin: 0 5px 0 0; }
 
 /* An empty reactions strip (only the hover-revealed "+") must not hold rows
-   apart: it docks beside the balloon in the invisible-avatar gutter — still
-   inside .msg-row, so the row-hover reveal keeps working and there's no dead
-   wedge for the pointer to cross. This applies to EVERY row (#16): the head
-   of a same-author run is not .grouped, and a 31px ghost strip under it was
+   apart: it docks at the balloon's bottom corner — still inside .msg-row, so
+   the row-hover reveal keeps working and there's no dead wedge for the
+   pointer to cross. This applies to EVERY row (#16): the head of a
+   same-author run is not .grouped, and a 31px ghost strip under it was
    keeping the first two balloons of the run a header-line apart. Strips with
-   real pills (with-pills) stay in the flow below the bubble as usual. */
+   real pills (with-pills) stay in the flow below the bubble as usual.
+   Dock side: the corner OPPOSITE the avatar — the old gutter dock put the
+   "+" straight on top of the avatar whenever the bubble was a line or two
+   short. Grouped rows are the exception: their avatar is only
+   visibility:hidden, so the gutter dock overlaps nothing, and the corner
+   opposite it is already taken by the grouped-only corner timestamp
+   (.msg-stamp) — docking the "+" there too would collide. */
 .msg-row .reactions:not(.with-pills) { position: absolute; bottom: -2px; margin: 0; }
-.msg-row .msg-other .reactions:not(.with-pills) { right: 100%; }
-.msg-row .msg-me .reactions:not(.with-pills) { left: 100%; }
+.msg-row:not(.grouped) .msg-other .reactions:not(.with-pills) { left: 100%; }
+.msg-row:not(.grouped) .msg-me .reactions:not(.with-pills) { right: 100%; }
+.msg-row.grouped .msg-other .reactions:not(.with-pills) { right: 100%; }
+.msg-row.grouped .msg-me .reactions:not(.with-pills) { left: 100%; }
 
 /* ---------- "New messages" unread divider (#11) ---------- */
 /* WhatsApp-style: a full-width hairline with a centered pill, inserted by
