@@ -268,6 +268,15 @@ class FakeDocument extends FakeNode {
     this.documentElement = new FakeElement("html");
     this.documentElement.appendChild(new FakeElement("body"));
     this.appendChild(this.documentElement);
+    // FontFaceSet stand-in: the app registers/deletes the "Rustermost Emoji"
+    // family here as the Emoji set setting changes (see applyEmojiSet).
+    this.fonts = {
+      faces: [],
+      add(f) { if (!this.faces.includes(f)) this.faces.push(f); },
+      delete(f) { const i = this.faces.indexOf(f); if (i >= 0) this.faces.splice(i, 1); },
+      has(f) { return this.faces.includes(f); },
+      load() { return Promise.resolve({}); },
+    };
   }
   get body() { return this.documentElement.firstChild; }
   createElement(tag) {
@@ -348,7 +357,13 @@ function buildSkeleton(doc) {
   const settings = h("div", { id: "settings-overlay", class: "modal-overlay hidden" },
     h("button", { id: "settings-close", type: "button" }),
     seg("fontSize", ["small", "medium", "large"]), seg("theme", ["dark", "light", "system"]),
-    seg("density", ["comfortable", "compact"]), h("input", { id: "giphy-key" }));
+    seg("density", ["comfortable", "compact"]),
+    seg("emojiSet", ["twemoji", "system", "custom"]),
+    h("div", { id: "emoji-custom-row", class: "setting-row hidden" },
+      h("input", { id: "emoji-font-file", type: "file", class: "hidden" }),
+      h("button", { id: "emoji-font-btn", class: "modal-primary", type: "button" }),
+      h("p", { id: "emoji-font-status", class: "modal-hint" })),
+    h("input", { id: "giphy-key" }));
 
   for (const el of [login, app, modal, settings]) doc.body.appendChild(el);
 }
@@ -407,17 +422,38 @@ function makeTauri(handlers, invokeLog, wsListeners) {
   };
 }
 
+// FontFace / FileReader: the app registers the "Rustermost Emoji" family at
+// runtime (Emoji set setting) and reads custom font files into data: URLs.
+// The fake FontFace just captures family/source for assertions; the fake
+// FileReader always resolves to one fixed payload — the font bytes never
+// matter to assertions, only the flow through the app. Both are installed
+// per boot with the other globals below.
+class FakeFontFace {
+  constructor(family, source) { this.family = family; this.source = source; }
+  load() { return Promise.resolve(this); }
+}
+class FakeFileReader {
+  readAsDataURL() {
+    this.result = "data:application/octet-stream;base64,AAAA";
+    setTimeout(() => { if (this.onload) this.onload(); if (this.onloadend) this.onloadend(); }, 0);
+  }
+}
+
 // Install the browser globals the app reads at module scope. Every boot
 // replaces them wholesale, so runs can't leak state into each other
 // ("Windows" in the UA keeps the Linux tray path dormant; CSS.escape is only
-// ever fed server ids, which are \w-safe already).
-function installGlobals(win, doc) {
+// ever fed server ids, which are \w-safe already). The world OWNS its
+// localStorage (created once in boot and passed here) — re-pointing globals
+// mid-test must not wipe it, a browser's store survives arbitrary events.
+function installGlobals(win, doc, storage) {
   const globals = {
     window: win,
     document: doc,
     navigator: { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) rustermost-harness" },
-    localStorage: makeLocalStorage(),
+    localStorage: storage || makeLocalStorage(),
     CSS: { escape: (s) => String(s).replace(/([^\w-])/g, "\\$1") },
+    FontFace: FakeFontFace,
+    FileReader: FakeFileReader,
   };
   for (const k of Object.keys(globals)) {
     Object.defineProperty(globalThis, k, { value: globals[k], configurable: true, writable: true });
@@ -458,8 +494,9 @@ export async function boot({ handlers = {}, channels = [], posts = {}, users = {
   const wsListeners = new Map();
   const tauri = makeTauri(allHandlers, invokeLog, wsListeners);
   const win = makeWindow(tauri);
+  const storage = makeLocalStorage(); // one store per world; survives reown()
   doc.parentNode = win; // events bubble el → … → body → document → window
-  installGlobals(win, doc);
+  installGlobals(win, doc, storage);
   // Pre-populate localStorage (saved settings/panes) so tests can cover the
   // "restart with persisted state" path; module scope reads it during import.
   for (const [k, v] of Object.entries(seeds)) globalThis.localStorage.setItem(k, v);
@@ -470,7 +507,7 @@ export async function boot({ handlers = {}, channels = [], posts = {}, users = {
   // main.js reads globals dynamically, so a later boot() in the same process
   // would otherwise hijack this world's document/localStorage. Re-pointing
   // them at interaction time keeps older worlds drivable.
-  const reown = () => installGlobals(win, doc);
+  const reown = () => installGlobals(win, doc, storage);
 
   const world = {
     document: doc,

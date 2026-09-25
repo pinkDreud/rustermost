@@ -94,7 +94,7 @@
           <form class="composer" id="composer">
             <div id="composer-resizer" class="composer-resizer" title="Drag to resize · double-click for auto"></div>
             <button type="button" id="attach-btn" class="attach-btn" title="Attach files">📎</button>
-            <button type="button" id="emoji-btn" class="attach-btn" title="Emoji">😊</button>
+            <button type="button" id="emoji-btn" class="attach-btn" title="Emoji">🙂</button>
             <button type="button" id="gif-btn" class="attach-btn gif-btn" title="GIFs">GIF</button>
             <input id="file-input" type="file" multiple class="hidden" />
             <textarea
@@ -175,6 +175,19 @@
               <button class="seg-btn" type="button" data-value="comfortable">Comfortable</button>
               <button class="seg-btn" type="button" data-value="compact">Compact</button>
             </div>
+          </div>
+          <div class="setting-row">
+            <div class="modal-label">Emoji set</div>
+            <div class="seg option-seg" data-setting="emojiSet" role="group" aria-label="Emoji set">
+              <button class="seg-btn" type="button" data-value="twemoji">Twemoji</button>
+              <button class="seg-btn" type="button" data-value="system">System</button>
+              <button class="seg-btn" type="button" data-value="custom">Custom</button>
+            </div>
+          </div>
+          <div class="setting-row hidden" id="emoji-custom-row">
+            <input type="file" id="emoji-font-file" accept=".woff2,.ttf,.otf" class="hidden" />
+            <button id="emoji-font-btn" class="modal-primary" type="button">Choose font file…</button>
+            <p id="emoji-font-status" class="modal-hint"></p>
           </div>
           <div class="setting-row">
             <div class="modal-label">Giphy API key</div>

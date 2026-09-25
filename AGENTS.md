@@ -57,6 +57,12 @@ Keep it up to date whenever conventions, structure or workflow change.
   `{ id, name, channelIds }`; frontend-only, no pre-paint copy.
 - Avatar/image URLs are interpolated into inline styles only after validating
   they are `data:image/…;base64,…` URLs (see `paintAvatar`).
+- Emoji render through the font family "Rustermost Emoji" (default: bundled
+  Twemoji from `src/fonts/` — a SUBSET covering the picker catalog + app
+  chrome, regenerated with `packaging/subset-emoji-font.py`; switchable in
+  Settings to system or a user-loaded font, persisted under
+  `rustermost.emojiFont`) — glyphs stay plain characters, no image
+  replacement.
 - External links open via the opener plugin, http(s) only (see `openExternal`).
 
 ## Testing (frontend)

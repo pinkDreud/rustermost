@@ -1,5 +1,10 @@
 /* rustermost — dark modern UI. Frontend only; talks to the existing Rust commands. */
 
+/* The "Rustermost Emoji" family in the font stacks below is registered
+   dynamically (FontFace API, see applyEmojiSet in main.js) so the Emoji set
+   setting can switch its source: bundled Twemoji / system fallback / a
+   user-loaded custom font. No static font-face block here on purpose. */
+
 /* Type scale: the root font-size is the single knob the font-size setting turns
    (see applySettings in main.js; the fallback here must match FONT_SIZES.medium
    there). Every font-size below is in rem so the whole UI scales together. Box
@@ -74,7 +79,7 @@ html, body {
   height: 100%;
   background: var(--bg-0);
   color: var(--text);
-  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, "Rustermost Emoji", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -739,7 +744,7 @@ select.modal-input { appearance: none; cursor: pointer; }
   background: var(--code-bg);
   padding: 1px 5px;
   border-radius: 4px;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Rustermost Emoji", monospace;
   font-size: 0.86rem;
 }
 .msg-body pre {

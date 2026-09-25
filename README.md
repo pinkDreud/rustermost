@@ -12,6 +12,8 @@ A lightweight, WhatsApp-style alternative desktop client for Mattermost.
 
 This project has a deliberate division of labor: the **Rust backend** (`src-tauri/`) is hand-written by me as a learning exercise — while exploring Rust, under some guidance by various LLMs. The **frontend** (`src/`, vanilla JavaScript) is the mirror image: it's programmed by AI assistants — started by Claude Opus via [Claude Code](https://claude.com/claude-code), continued by [Kimi](https://www.kimi.com/) via OpenCode. Keep that in mind when reading the code — the backend optimizes for learning clarity, the frontend for getting a UI built around it.
 
+Twemoji artwork © Twitter Inc., licensed CC-BY 4.0 (Mozilla COLR font build, bundled as a subset covering the picker catalog + app chrome).
+
 ## Overview
 
 rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed at organizations that run Mattermost behind **SSO** with **Personal Access Tokens disabled**. Since you can't get an API token the normal way, rustermost opens an SSO login window, captures the session cookie (`MMAUTHTOKEN`) from it, and reuses its value as a Bearer token for REST and WebSocket calls. Built with [Tauri v2](https://tauri.app/) (Rust backend + vanilla JS frontend).
@@ -30,7 +32,7 @@ rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed 
 - **Unread tracking synced with the server** — badges are seeded from Mattermost's read-state at startup, a pinned **Unread** section sits on top of the sidebar, and opening a conversation reports the read back so your other devices clear their badges too.
 - **File & image attachments, both directions** — send via the 📎 button, drag & drop, or pasting a screenshot; received images render as thumbnails with a click-to-zoom lightbox, other files as named chips.
 - **Markdown rendering** — links (opened in the system browser), bold/italic/strikethrough, inline code and fenced code blocks, quotes, and lists — built as DOM nodes, never injected HTML.
-- **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), a 😊 browse-and-search picker next to the 📎, and the server's custom emoji rendered inline.
+- **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), a 🙂 browse-and-search picker next to the 📎, and the server's custom emoji rendered inline.
 - **GIF search** — a GIF button in the composer searches Giphy and queues the pick as a normal attachment, so it uploads to Mattermost as a real file. Bring your own free API key (pasted into ⚙ Settings); without one the picker just says so. Searching talks to Giphy directly from the app, so they see your IP.
 - **Reactions** — react to any message from a searchable emoji picker; counts update live across clients and devices.
 - **Slash commands** — `/away`, `/shrug`, custom integrations — executed for real, with ephemeral replies rendered in-chat as "only visible to you" bubbles.

@@ -195,11 +195,12 @@ function loadUrl() { try { return localStorage.getItem(URL_KEY) || ""; } catch (
 // script in index.html (this module is deferred, too late to prevent a flash);
 // this copy owns everything after that: live changes and OS theme tracking.
 const SETTINGS_KEY = "rustermost.settings";
-const SETTINGS_DEFAULTS = { fontSize: "medium", theme: "dark", density: "comfortable", giphyKey: "" };
+const SETTINGS_DEFAULTS = { fontSize: "medium", theme: "dark", density: "comfortable", emojiSet: "twemoji", giphyKey: "" };
 const SETTINGS_VALUES = {
   fontSize: ["small", "medium", "large"],
   theme: ["dark", "light", "system"],
   density: ["comfortable", "compact"],
+  emojiSet: ["twemoji", "system", "custom"],
 };
 // Must stay in sync with the inline script in index.html; "medium" must also
 // match the fallback in styles.css (html { font-size: var(--app-font-size, 14px) }).
@@ -340,6 +341,60 @@ function applySettings() {
   const theme = settings.theme === "system" ? (lightQuery && lightQuery.matches ? "light" : "dark") : settings.theme;
   root.dataset.theme = theme;
   root.dataset.density = settings.density;
+  applyEmojiSet();
+}
+
+// ---------- emoji font (Twemoji / System / Custom) ----------
+// The styles.css font stacks reference the family "Rustermost Emoji", but
+// styles.css declares NO @font-face for it: the family is registered at
+// runtime through the FontFace API so the emojiSet setting can switch its
+// source — the bundled Twemoji webfont (default), nothing (System: the
+// stacks fall through to the glossy system emoji font), or a user-picked
+// file kept whole as a data: URL under EMOJI_FONT_KEY (Custom). There is no
+// pre-paint copy in index.html — a font arriving a tick late can't
+// meaningfully flash.
+const EMOJI_FONT_FAMILY = "Rustermost Emoji";
+const EMOJI_FONT_KEY = "rustermost.emojiFont";
+const EMOJI_FONT_MAX_MB = 4;
+
+// The currently registered FontFace — switching sets deletes it first.
+let emojiFace = null;
+
+function registerEmojiFont(source) {
+  if (emojiFace) { document.fonts.delete(emojiFace); emojiFace = null; }
+  if (!source) return;
+  // A tampered/corrupt persisted payload (e.g. a hand-edited data: URL) can
+  // make new FontFace throw on malformed CSS — never let that crash boot:
+  // with no face registered the set simply behaves like System.
+  try {
+    emojiFace = new FontFace(EMOJI_FONT_FAMILY, source);
+    document.fonts.add(emojiFace);
+    // A font that fails to load just leaves the stacks to fall back to system.
+    emojiFace.load().catch(() => {});
+  } catch (_) {
+    emojiFace = null;
+  }
+}
+
+// The custom face persists as one JSON object { name, data }; a hand-edited
+// or stale entry degrades to null (Custom then behaves like System).
+function loadEmojiFont() {
+  try {
+    const o = JSON.parse(localStorage.getItem(EMOJI_FONT_KEY));
+    if (o && typeof o.name === "string" && typeof o.data === "string" && o.data.startsWith("data:")) return o;
+  } catch (_) {}
+  return null;
+}
+
+function applyEmojiSet() {
+  if (settings.emojiSet === "twemoji") {
+    registerEmojiFont('url("fonts/twemoji-mozilla.woff2") format("woff2")');
+  } else if (settings.emojiSet === "custom") {
+    const stored = loadEmojiFont();
+    registerEmojiFont(stored ? `url("${stored.data}")` : null);
+  } else {
+    registerEmojiFont(null); // system
+  }
 }
 
 // Follow live OS theme changes while set to "system". Older WebKit only has
@@ -2940,7 +2995,7 @@ function applyMention(u) {
 
 // ---------- emoji picker (composer) ----------
 // The ":na…" autocomplete above only helps when you already know the name.
-// This is the browse-and-search half: the 😊 button opens a grid of every
+// This is the browse-and-search half: the 🙂 button opens a grid of every
 // shortcode we know — the server's custom emoji first, since those are the
 // ones you cannot type from a keyboard — and clicking one inserts it.
 const EMOJI_PICKER_MAX = 400; // a big server emoji set should not build 5000 nodes
@@ -3839,6 +3894,10 @@ function renderSettingsControls() {
       btn.setAttribute("aria-pressed", String(active));
     }
   }
+  // The custom-font picker row only matters for the "custom" emoji set.
+  emojiCustomRow.classList.toggle("hidden", settings.emojiSet !== "custom");
+  const storedFont = loadEmojiFont();
+  emojiFontStatus.textContent = settings.emojiSet === "custom" && storedFont ? `Loaded: ${storedFont.name}` : "";
 }
 
 function openSettings() {
@@ -3853,6 +3912,40 @@ const giphyKeyInput = $("giphy-key");
 giphyKeyInput.addEventListener("input", () => {
   settings.giphyKey = giphyKeyInput.value.trim();
   saveSettings();
+});
+
+// Custom emoji font: a hidden file input driven by a button (same pattern as
+// the composer attach flow); the picked file is read into a data: URL so the
+// font persists whole as one localStorage value.
+const emojiCustomRow = $("emoji-custom-row");
+const emojiFontBtn = $("emoji-font-btn");
+const emojiFontFile = $("emoji-font-file");
+const emojiFontStatus = $("emoji-font-status");
+
+emojiFontBtn.addEventListener("click", () => emojiFontFile.click());
+emojiFontFile.addEventListener("change", () => {
+  const file = emojiFontFile.files && emojiFontFile.files[0];
+  if (!file) return;
+  const isFontFile = /\.(woff2|ttf|otf)$/i.test(file.name || "");
+  if (!isFontFile || file.size > EMOJI_FONT_MAX_MB * 1024 * 1024) {
+    emojiFontStatus.textContent = "That file doesn't look like a font (max 4 MB: .woff2/.ttf/.otf).";
+    // Clear the selection: re-picking the SAME file must re-fire "change".
+    emojiFontFile.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      localStorage.setItem(EMOJI_FONT_KEY, JSON.stringify({ name: file.name, data: reader.result }));
+    } catch (_) {
+      emojiFontStatus.textContent = "Couldn't store the font (storage full).";
+      return;
+    }
+    applyEmojiSet();
+    emojiFontStatus.textContent = `Loaded: ${file.name}`;
+    renderSettingsControls();
+  };
+  reader.readAsDataURL(file);
 });
 
 settingsBtn.addEventListener("click", openSettings);
