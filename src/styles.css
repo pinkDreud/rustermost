@@ -275,6 +275,11 @@ button {
 }
 .channel-item:hover { background: var(--bg-2); }
 .channel-item.active { background: var(--bg-2); border-left-color: var(--accent); }
+/* Drag & drop into/out of spaces: the dragged row fades; the hovered drop
+   target lights up — solid tint on headers, dashed frame on a section body. */
+.channel-item.drag-source { opacity: 0.5; }
+.section-title.drop-target { background: var(--accent-dim); }
+.section.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .item-avatar { width: 34px; height: 34px; font-size: 0.93rem; background: var(--avatar-bg); }
 .item-avatar.dm { background: linear-gradient(135deg, #3a7d5a, #2f9e7b); }
 .item-main { flex: 1; min-width: 0; }

@@ -815,6 +815,59 @@ function activityOf(ch) {
 // by renderSidebar and the space sections.
 function byRecency(a, b) { return activityOf(b) - activityOf(a); }
 
+// ================= SIDEBAR DRAG & DROP =================
+// A conversation can be dragged onto a sidebar section to move it in or out
+// of a space: a space section (header included) accepts any conversation —
+// the drop assigns it — while a default section's header accepts only
+// conversations of its own type, and the drop takes it back OUT of its space.
+// The dragged id lives in a module-level variable set at dragstart: browsers
+// only expose dataTransfer.getData during the drop itself, but the default
+// headers need the dragged conversation's TYPE already during dragover to
+// decide whether a drop is even allowed. The dataTransfer write still happens
+// for real-world interop, but the module value is the source of truth.
+let draggingChannelId = null;
+
+function draggingChannel() {
+  if (!draggingChannelId) return null;
+  return state.channels.find((c) => c.id === draggingChannelId) || null;
+}
+
+// Default-section type gates (Community covers public + private, incl. its
+// per-team sub-headers). The pinned Unread section wires nothing at all.
+const dropAcceptsDM = (type) => type === "D";
+const dropAcceptsGroup = (type) => type === "G";
+const dropAcceptsCommunity = (type) => type === "O" || type === "P";
+
+// Wires one element as a drop target for conversation drags. `accepts`
+// (null for space sections) gates eligibility by channel type — a refused
+// dragover simply isn't preventDefaulted, so the native "no drop" cursor
+// shows. stopPropagation everywhere: a space header sits INSIDE its section
+// wrapper and both are targets, so the event must not be handled twice.
+function makeDropTarget(el, accepts, targetSpaceId) {
+  const allowed = () => {
+    const ch = draggingChannel(); // unknown/none dragged → refuse everything
+    return !!ch && (!accepts || accepts(ch.type));
+  };
+  el.addEventListener("dragover", (e) => {
+    e.stopPropagation();
+    if (!allowed()) return;
+    e.preventDefault(); // allows the drop
+    try { if (e.dataTransfer) e.dataTransfer.dropEffect = "move"; } catch (_) {}
+    el.classList.add("drop-target");
+  });
+  el.addEventListener("dragleave", (e) => {
+    e.stopPropagation();
+    el.classList.remove("drop-target");
+  });
+  el.addEventListener("drop", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    el.classList.remove("drop-target");
+    if (!allowed()) return; // id empty/unknown, or the type gate refuses it
+    assignToSpace(draggingChannelId, targetSpaceId); // same-space → no-op
+  });
+}
+
 function renderSidebar() {
   const q = (searchInput.value || "").toLowerCase();
   // The ✕ is shown exactly when there is text to clear. Syncing here —
@@ -852,8 +905,8 @@ function renderSidebar() {
   if (unread.length) channelList.appendChild(sectionEl("Unread", "Unread", unread, searching));
   // Spaces sit between pinned Unread and the default sections, in saved order.
   for (const s of spaces) channelList.appendChild(spaceEl(s, match, searching, byId));
-  channelList.appendChild(sectionEl("Direct messages", "Direct messages", direct, searching));
-  channelList.appendChild(sectionEl("Groups", "Groups", groups, searching));
+  channelList.appendChild(sectionEl("Direct messages", "Direct messages", direct, searching, false, dropAcceptsDM));
+  channelList.appendChild(sectionEl("Groups", "Groups", groups, searching, false, dropAcceptsGroup));
   channelList.appendChild(communityEl(community, searching));
 }
 
@@ -885,13 +938,17 @@ function sectionHeaderEl(key, label, count, open) {
 
 // Folded unless the user has opened it; while searching, sections are forced
 // open so matches are never hidden. `sub` renders the indented variant used
-// for the per-team groups inside Community.
-function sectionEl(key, label, items, forceOpen, sub) {
+// for the per-team groups inside Community. `dropAccepts`, when given, makes
+// the header a drop target that takes a dragged conversation back OUT of its
+// space — gated to the section's channel type (the pinned Unread passes none).
+function sectionEl(key, label, items, forceOpen, sub, dropAccepts) {
   const open = forceOpen || isOpen(key);
 
   const wrap = document.createElement("div");
   wrap.className = sub ? "section sub" : "section";
-  wrap.appendChild(sectionHeaderEl(key, label, items.length, open));
+  const header = sectionHeaderEl(key, label, items.length, open);
+  if (dropAccepts) makeDropTarget(header, dropAccepts, null);
+  wrap.appendChild(header);
 
   if (!open) return wrap;
 
@@ -924,10 +981,17 @@ function spaceEl(space, match, forceOpen, byId) {
   const wrap = document.createElement("div");
   wrap.className = "section";
   const header = sectionHeaderEl(key, space.name, items.length, open);
+  // The space-title marker: the background right-click menu steps aside for
+  // it, and the drop-styling CSS keys off section-title regardless.
+  header.classList.add("space-title");
   header.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     openSpaceMenu(space, e.clientX, e.clientY);
   });
+  // Drop target: the header (all a folded space shows) AND the whole section
+  // body (a drop anywhere in it counts); makeDropTarget stops propagation.
+  makeDropTarget(header, null, space.id);
+  makeDropTarget(wrap, null, space.id);
   wrap.appendChild(header);
 
   if (!open) return wrap;
@@ -950,7 +1014,9 @@ function communityEl(items, forceOpen) {
 
   const wrap = document.createElement("div");
   wrap.className = "section";
-  wrap.appendChild(sectionHeaderEl("Community", "Community", items.length, open));
+  const header = sectionHeaderEl("Community", "Community", items.length, open);
+  makeDropTarget(header, dropAcceptsCommunity, null);
+  wrap.appendChild(header);
 
   if (!open) return wrap;
 
@@ -962,7 +1028,7 @@ function communityEl(items, forceOpen) {
     wrap.appendChild(e);
   }
   for (const t of teams) {
-    wrap.appendChild(sectionEl(`team:${t.id}`, t.name, t.items, forceOpen, true));
+    wrap.appendChild(sectionEl(`team:${t.id}`, t.name, t.items, forceOpen, true, dropAcceptsCommunity));
   }
   return wrap;
 }
@@ -995,6 +1061,24 @@ function channelItemEl(ch) {
   row.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     openChannelMenu(ch, e.clientX, e.clientY);
+  });
+  // Draggable into/out of space sections (see makeDropTarget above).
+  row.draggable = true;
+  row.addEventListener("dragstart", (e) => {
+    draggingChannelId = ch.id; // source of truth — see makeDropTarget
+    const dt = e.dataTransfer; // may be missing in degenerate environments
+    if (dt) {
+      dt.setData("text/plain", ch.id);
+      try { dt.effectAllowed = "move"; } catch (_) {}
+    }
+    row.classList.add("drag-source");
+  });
+  row.addEventListener("dragend", () => {
+    // dragend fires even when the drop was cancelled.
+    draggingChannelId = null;
+    row.classList.remove("drag-source");
+    // … and a cancel can strand a highlight when no dragleave arrived first.
+    for (const t of channelList.querySelectorAll(".drop-target")) t.classList.remove("drop-target");
   });
 
   const av = document.createElement("div");
@@ -1064,6 +1148,25 @@ function openChannelMenu(ch, x, y) {
   });
   channelMenu.appendChild(spaceRow);
 
+  showChannelMenu(x, y);
+}
+
+// Right-click on the sidebar background: the same shell holds just one row.
+function openNewSpaceMenu(x, y) {
+  channelMenu.innerHTML = "";
+  const row = document.createElement("div");
+  row.className = "context-menu-row";
+  row.textContent = "🗂  New space…";
+  row.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    closeChannelMenu();
+    openSpaceCreate();
+  });
+  channelMenu.appendChild(row);
+  showChannelMenu(x, y);
+}
+
+function showChannelMenu(x, y) {
   channelMenu.classList.remove("hidden");
   const r = channelMenu.getBoundingClientRect(); // measurable now that it is shown
   channelMenu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
@@ -1074,16 +1177,28 @@ function closeChannelMenu() {
   channelMenu.classList.add("hidden");
 }
 
+// Background right-click anywhere in the list that isn't a conversation row
+// (keeps its own menu) or a space header (keeps its MANAGE modal): empty area
+// below the sections, default section headers, "Nothing here." rows.
+channelList.addEventListener("contextmenu", (e) => {
+  if (e.target.closest(".channel-item")) return;
+  if (e.target.closest(".space-title")) return;
+  e.preventDefault();
+  openNewSpaceMenu(e.clientX, e.clientY);
+});
+
 // ---- the space modal ----
-// One shell, two modes, built once like channelMenu above. PICK (from a
+// One shell, three modes, built once like channelMenu above. PICK (from a
 // conversation's right-click menu) lists the spaces it can move into — with a
 // ✓ on its current one — plus the "No space" way out, and can create a space
 // on the spot; MANAGE (right-click on a space header) renames or deletes that
-// space. Each mode is its own .modal-body block inside the one shared .modal
-// chrome; the hidden class swaps them. DOM nodes only — never innerHTML.
+// space; CREATE (right-click on the sidebar background) is just the name
+// field, with no assignment target. Each mode is its own .modal-body block
+// inside the one shared .modal chrome; the hidden class swaps them. DOM nodes
+// only — never innerHTML.
 const spaceOverlay = document.createElement("div");
 spaceOverlay.className = "modal-overlay hidden";
-let spaceModalTarget = null; // { ch } in PICK mode, { space } in MANAGE mode
+let spaceModalTarget = null; // { ch } in PICK, { space } in MANAGE, { create: true } in CREATE
 
 const spaceModal = document.createElement("div");
 spaceModal.className = "modal";
@@ -1132,9 +1247,23 @@ spaceManageWrap.appendChild(spaceRenameInput);
 spaceManageWrap.appendChild(spaceRenameBtn);
 spaceManageWrap.appendChild(spaceDeleteBtn);
 
+// CREATE mode block (sidebar background right-click): just the name field.
+const spaceCreateWrap = document.createElement("div");
+spaceCreateWrap.className = "modal-body hidden";
+const spaceNewInput = document.createElement("input");
+spaceNewInput.className = "modal-input";
+spaceNewInput.placeholder = "New space name…";
+const spaceNewBtn = document.createElement("button");
+spaceNewBtn.className = "modal-primary";
+spaceNewBtn.type = "button";
+spaceNewBtn.textContent = "Create space";
+spaceCreateWrap.appendChild(spaceNewInput);
+spaceCreateWrap.appendChild(spaceNewBtn);
+
 spaceModal.appendChild(spaceHeader);
 spaceModal.appendChild(spacePickWrap);
 spaceModal.appendChild(spaceManageWrap);
+spaceModal.appendChild(spaceCreateWrap);
 spaceOverlay.appendChild(spaceModal);
 document.body.appendChild(spaceOverlay);
 
@@ -1143,6 +1272,7 @@ function openSpacePicker(ch) {
   spaceTitle.textContent = `Move “${displayName(ch)}”`;
   spacePickWrap.classList.remove("hidden");
   spaceManageWrap.classList.add("hidden");
+  spaceCreateWrap.classList.add("hidden");
 
   // One row per existing space — ✓ marks the one the conversation is in —
   // then the permanent way back to the default section.
@@ -1179,6 +1309,7 @@ function openSpacePicker(ch) {
   spacePickList.appendChild(noneRow);
 
   spaceNameInput.value = "";
+  spaceNewInput.value = "";
   spaceOverlay.classList.remove("hidden");
   spaceNameInput.focus();
 }
@@ -1188,9 +1319,26 @@ function openSpaceMenu(space) {
   spaceTitle.textContent = `Space: ${space.name}`;
   spacePickWrap.classList.add("hidden");
   spaceManageWrap.classList.remove("hidden");
+  spaceCreateWrap.classList.add("hidden");
   spaceRenameInput.value = space.name;
+  spaceNameInput.value = "";
+  spaceNewInput.value = "";
   spaceOverlay.classList.remove("hidden");
   spaceRenameInput.focus();
+}
+
+// CREATE mode (from the background menu's "New space…" row): the name field
+// alone — no conversation is being moved, so creating only adds the section.
+function openSpaceCreate() {
+  spaceModalTarget = { create: true };
+  spaceTitle.textContent = "New space";
+  spacePickWrap.classList.add("hidden");
+  spaceManageWrap.classList.add("hidden");
+  spaceCreateWrap.classList.remove("hidden");
+  spaceNameInput.value = "";
+  spaceNewInput.value = "";
+  spaceOverlay.classList.remove("hidden");
+  spaceNewInput.focus();
 }
 
 function closeSpaceModal() {
@@ -1228,6 +1376,20 @@ spaceDeleteBtn.addEventListener("click", () => {
   if (!target || !target.space) return;
   deleteSpace(target.space.id);
   closeSpaceModal();
+});
+
+// Same deal for "Create space" in CREATE mode: a blank name is rejected and
+// the modal stays open. createSpace only persists, so re-render explicitly.
+function createSpaceFromCreate() {
+  const target = spaceModalTarget;
+  if (!target || !target.create) return;
+  if (!createSpace(spaceNewInput.value)) return;
+  closeSpaceModal();
+  renderSidebar();
+}
+spaceNewBtn.addEventListener("click", createSpaceFromCreate);
+spaceNewInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); createSpaceFromCreate(); }
 });
 
 spaceCloseBtn.addEventListener("click", closeSpaceModal);
