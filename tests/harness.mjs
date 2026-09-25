@@ -322,11 +322,13 @@ function buildSkeleton(doc) {
     h("input", { id: "search-input" }),
     h("button", { id: "search-clear-btn", type: "button", class: "search-clear hidden", "aria-label": "Clear search" },
       doc.createTextNode("✕")),
-    h("div", { id: "channel-list" }), h("div", { id: "empty-state" }),
+    h("div", { id: "channel-list" }), h("div", { id: "sidebar-resizer", class: "sidebar-resizer" }),
+    h("div", { id: "empty-state" }),
     h("div", { id: "chat-panel", class: "chat-panel hidden" },
       h("div", { id: "chat-title" }), h("div", { id: "chat-sub" }), h("button", { id: "mute-btn", type: "button" }),
       h("div", { id: "messages" }), h("div", { id: "pending-files", class: "pending-files hidden" }),
       h("form", { id: "composer" },
+        h("div", { id: "composer-resizer", class: "composer-resizer" }),
         h("button", { id: "attach-btn", type: "button" }), h("button", { id: "emoji-btn", type: "button" }),
         h("button", { id: "gif-btn", type: "button" }), h("input", { id: "file-input", type: "file" }),
         h("textarea", { id: "composer-input" }), h("button", { id: "send-btn", type: "submit" }))));
@@ -433,7 +435,7 @@ export async function flush(rounds = 10) {
   for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 0));
 }
 
-export async function boot({ handlers = {}, channels = [], posts = {}, users = {}, me = DEFAULT_ME } = {}) {
+export async function boot({ handlers = {}, channels = [], posts = {}, users = {}, me = DEFAULT_ME, seeds = {} } = {}) {
   // Handlers for a realistic, quiet boot; per-test overrides win.
   const allHandlers = {
     restore_session: async () => "https://mm.example.org",
@@ -458,6 +460,9 @@ export async function boot({ handlers = {}, channels = [], posts = {}, users = {
   const win = makeWindow(tauri);
   doc.parentNode = win; // events bubble el → … → body → document → window
   installGlobals(win, doc);
+  // Pre-populate localStorage (saved settings/panes) so tests can cover the
+  // "restart with persisted state" path; module scope reads it during import.
+  for (const [k, v] of Object.entries(seeds)) globalThis.localStorage.setItem(k, v);
 
   // Cache-bust so each boot re-evaluates main.js fresh — module scope IS app state.
   await import(pathToFileURL(MAIN_JS).href + "?boot=" + ++bootCount);

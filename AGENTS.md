@@ -48,7 +48,11 @@ Keep it up to date whenever conventions, structure or workflow change.
 - Settings persist in localStorage key `rustermost.settings`; enum values are
   validated against `SETTINGS_VALUES`; applied via CSS variables / `data-*`
   attributes. The inline script in `index.html` is the pre-paint copy and
-  **must stay in sync** with the `SETTINGS_*` constants in `main.js`.
+  **must stay in sync** with the `SETTINGS_*` constants in `main.js`. Pane
+  sizes (sidebar width + composer floor, set via drag sashes) persist
+  separately under `rustermost.panes`; the same inline script re-applies the
+  sidebar width pre-paint, so it must also stay in sync with the
+  `SIDEBAR_MIN`/`SIDEBAR_MAX` clamp in `main.js`.
 - Avatar/image URLs are interpolated into inline styles only after validating
   they are `data:image/…;base64,…` URLs (see `paintAvatar`).
 - External links open via the opener plugin, http(s) only (see `openExternal`).

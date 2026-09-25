@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="favicon.png" />
     <script>
-      // Apply the saved display settings before the first paint. main.js is a
-      // deferred module, so it runs too late to stop a flash of the default
-      // dark/medium look; this tiny blocking copy closes that gap. The values
-      // MUST stay in sync with the SETTINGS_* constants in main.js.
+      // Apply the saved display settings (and the sidebar width) before the
+      // first paint. main.js is a deferred module, so it runs too late to stop
+      // a flash of the default dark/medium look; this tiny blocking copy
+      // closes that gap. The values MUST stay in sync with the SETTINGS_*
+      // constants in main.js — and the sidebar clamp with SIDEBAR_MIN/MAX.
       (function () {
         var FONT = { small: "13px", medium: "14px", large: "16px" };
         var s = {};
@@ -19,6 +20,11 @@
           (s.theme === "system" && window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches);
         root.dataset.theme = light ? "light" : "dark";
         root.dataset.density = s.density === "compact" ? "compact" : "comfortable";
+        try {
+          var p = JSON.parse(localStorage.getItem("rustermost.panes")) || {};
+          if (isFinite(p.sidebar) && p.sidebar > 0)
+            root.style.setProperty("--sidebar-width", Math.min(Math.max(p.sidebar, 200), 560) + "px");
+        } catch (e) {}
       })();
     </script>
     <link rel="stylesheet" href="styles.css" />
@@ -64,6 +70,8 @@
         </div>
       </aside>
 
+      <div id="sidebar-resizer" class="sidebar-resizer" title="Drag to resize · double-click to reset"></div>
+
       <main class="conversation">
         <div id="empty-state" class="empty-state">
           <div>
@@ -84,6 +92,7 @@
           <div class="messages" id="messages"></div>
           <div id="pending-files" class="pending-files hidden"></div>
           <form class="composer" id="composer">
+            <div id="composer-resizer" class="composer-resizer" title="Drag to resize · double-click for auto"></div>
             <button type="button" id="attach-btn" class="attach-btn" title="Attach files">📎</button>
             <button type="button" id="emoji-btn" class="attach-btn" title="Emoji">😊</button>
             <button type="button" id="gif-btn" class="attach-btn gif-btn" title="GIFs">GIF</button>

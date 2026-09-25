@@ -158,8 +158,9 @@ button {
 
 /* ---------- sidebar ---------- */
 .sidebar {
-  width: 320px;
-  min-width: 320px;
+  width: var(--sidebar-width, 320px);
+  min-width: 200px;
+  max-width: 60vw;
   background: var(--bg-1);
   border-right: 1px solid var(--border);
   display: flex;
@@ -450,7 +451,7 @@ button {
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  padding: 14px 20px;
+  padding: 10px 16px;
   border-top: 1px solid var(--border);
   background: var(--bg-1);
 }
@@ -461,6 +462,10 @@ button {
   line-height: 1.4;
   font-family: inherit;
 }
+/* A touch tighter than the shared input block above (the composer is the
+   app's busiest chrome). max-height stays at 140px as the no-JS fallback —
+   main.js mirrors it inline once pane resizing is live. */
+.composer textarea { padding: 9px 13px; }
 .composer button {
   flex: 0 0 auto;
   width: 42px; height: 42px;
@@ -473,6 +478,32 @@ button {
 }
 .composer button:hover { filter: brightness(1.1); }
 .composer button:active { transform: scale(0.94); }
+
+/* ---------- pane resizers ---------- */
+/* Sash between sidebar and conversation; the negative margins center the 7px
+   hit strip on the 1px border so the layout costs nothing. */
+.sidebar-resizer {
+  flex: 0 0 auto;
+  width: 7px;
+  margin-left: -4px;
+  margin-right: -3px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 30;
+}
+.sidebar-resizer:hover { background: var(--accent-dim); }
+/* Sits on the composer's top border (the composer is position: relative for
+   its popups); reaches 3px into the padding on each side. */
+.composer-resizer {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: row-resize;
+  z-index: 30;
+}
+.composer-resizer:hover { background: var(--accent-dim); }
 
 /* ---------- message editing ---------- */
 /* Small tag on the meta line of a message that was changed after posting. */
@@ -534,7 +565,7 @@ button {
 :root[data-density="compact"] .item-avatar { width: 28px; height: 28px; }
 :root[data-density="compact"] .sidebar-header { padding: 10px 14px; }
 :root[data-density="compact"] .chat-header { padding: 9px 16px; }
-:root[data-density="compact"] .composer { padding: 10px 16px; }
+:root[data-density="compact"] .composer { padding: 8px 14px; }
 
 /* ---------- modal chrome (shared: new-conversation + settings) ---------- */
 .modal-overlay {

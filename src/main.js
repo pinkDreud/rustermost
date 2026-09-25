@@ -272,6 +272,99 @@ else if (lightQuery && lightQuery.addListener) lightQuery.addListener(onSchemeCh
 
 applySettings();
 
+// ================= PANE RESIZING =================
+// The sidebar's right edge and the composer's top edge carry drag handles.
+// The sidebar width is a CSS variable on <html> (the inline script in
+// index.html re-applies it before the first paint — SIDEBAR_MIN/MAX must stay
+// in sync with that copy). The composer size is a FLOOR the textarea's content
+// auto-grow sits on (see autoResize); dragging below COMPOSER_SNAP snaps back
+// to pure auto-grow, which is also what a double-click restores on either
+// handle. Both persist in localStorage under one JSON key.
+const PANES_KEY = "rustermost.panes";
+const SIDEBAR_MIN = 200, SIDEBAR_MAX = 560, SIDEBAR_DEFAULT = 320;
+const COMPOSER_SNAP = 44;        // px; dragging smaller than this = back to auto
+const COMPOSER_MAX_FRAC = 0.6;   // of the window height
+const COMPOSER_AUTO_CAP = 140;   // content-growth cap while no floor is set
+
+function clampNum(n, lo, hi) { return Math.min(Math.max(n, lo), hi); }
+
+function loadPanes() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(PANES_KEY)) || {}; } catch (_) {}
+  const num = (v) => (typeof v === "number" && isFinite(v) ? v : null);
+  return {
+    sidebar: clampNum(num(saved.sidebar) ?? SIDEBAR_DEFAULT, SIDEBAR_MIN, SIDEBAR_MAX),
+    composer: Math.max(0, num(saved.composer) ?? 0),
+  };
+}
+const panes = loadPanes();
+function savePanes() {
+  try { localStorage.setItem(PANES_KEY, JSON.stringify(panes)); } catch (_) {}
+}
+// How far content may still grow the box: the classic cap, or the user's
+// floor when that is taller (autoResize needs it for the inline max-height).
+function composerCap() { return Math.max(COMPOSER_AUTO_CAP, panes.composer); }
+
+function applyPanes() {
+  document.documentElement.style.setProperty("--sidebar-width", panes.sidebar + "px");
+  autoResize(); // folds the composer floor in (declared later — hoisted)
+}
+applyPanes();
+
+const sidebarResizer = $("sidebar-resizer");
+const composerResizer = $("composer-resizer");
+
+// Shared mouse-drag plumbing: move events until mouseup, plus a locked cursor
+// and no text selection while the drag lasts. Listeners live on `document` so
+// they survive the pointer leaving the 7px sash.
+function dragTrack(cursor, move, done) {
+  document.body.style.cursor = cursor;
+  document.body.style.userSelect = "none";
+  const onMove = (e) => move(e);
+  const onUp = (e) => {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    if (done) done(e);
+  };
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
+}
+
+sidebarResizer.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  const startX = e.clientX, startW = panes.sidebar;
+  dragTrack("col-resize", (ev) => {
+    const maxW = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, window.innerWidth * 0.6));
+    panes.sidebar = Math.round(clampNum(startW + ev.clientX - startX, SIDEBAR_MIN, maxW));
+    document.documentElement.style.setProperty("--sidebar-width", panes.sidebar + "px");
+  }, savePanes);
+});
+sidebarResizer.addEventListener("dblclick", () => {
+  panes.sidebar = SIDEBAR_DEFAULT;
+  applyPanes();
+  savePanes();
+});
+
+composerResizer.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  const startY = e.clientY;
+  // Rendered height when measurable (zero-size layout engines fall back to the
+  // current floor, or one line so an untouched composer drags up from ~its size).
+  const startH = composerInput.getBoundingClientRect().height || Math.max(panes.composer, COMPOSER_SNAP);
+  dragTrack("row-resize", (ev) => {
+    const target = clampNum(startH + (startY - ev.clientY), 0, window.innerHeight * COMPOSER_MAX_FRAC);
+    panes.composer = target < COMPOSER_SNAP ? 0 : Math.round(target);
+    applyPanes();
+  }, savePanes);
+});
+composerResizer.addEventListener("dblclick", () => {
+  panes.composer = 0;
+  applyPanes();
+  savePanes();
+});
+
 // ================= LOGIN =================
 urlForm.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -2912,9 +3005,13 @@ function ephemeralBubble(text) {
   scrollToBottom();
 }
 
+// max-height normally lives in CSS; JS mirrors it inline so a user floor
+// taller than COMPOSER_AUTO_CAP can win, and the floor itself keeps the box
+// open to the dragged size even while empty. floor 0 = the classic behavior.
 function autoResize() {
+  composerInput.style.maxHeight = composerCap() + "px";
   composerInput.style.height = "auto";
-  composerInput.style.height = Math.min(composerInput.scrollHeight, 140) + "px";
+  composerInput.style.height = Math.max(Math.min(composerInput.scrollHeight, composerCap()), panes.composer) + "px";
 }
 
 // ================= MESSAGE EDITING =================
