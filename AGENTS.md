@@ -54,7 +54,13 @@ Keep it up to date whenever conventions, structure or workflow change.
   sidebar width pre-paint, so it must also stay in sync with the
   `SIDEBAR_MIN`/`SIDEBAR_MAX` clamp in `main.js`. Sidebar spaces (user-named
   conversation groups) persist under `rustermost.spaces` — a JSON array of
-  `{ id, name, channelIds }`; frontend-only, no pre-paint copy.
+  `{ id, name, channelIds }`; frontend-only, no pre-paint copy. Custom emoji
+  images persist in **IndexedDB** (database `rustermost`, store `emoji`,
+  records `{ id, data }` keyed by emoji id — images are immutable per id, so
+  no versioning): at startup they are folded into `state.emojiImages`, pruned
+  against the server list, and the missing ones prefetched by a background
+  worker pool; degrades to memory-only for the session when IndexedDB is
+  unavailable.
 - Avatar/image URLs are interpolated into inline styles only after validating
   they are `data:image/…;base64,…` URLs (see `paintAvatar`).
 - Emoji render through the font family "Rustermost Emoji" (default: bundled
@@ -70,7 +76,9 @@ Keep it up to date whenever conventions, structure or workflow change.
 - Harness: `tests/harness.mjs` — a dependency-free fake DOM + a stubbed
   `window.__TAURI__` bridge. It boots `src/main.js` in Node by having the
   `restore_session`/`fetch_me` stubs resolve, so the app's `init()` runs; tests
-  then drive the app through fake events.
+  then drive the app through fake events. It also fakes **IndexedDB** per boot
+  (seed via the `emojiCache` boot option; `noIdb` installs `indexedDB` as
+  undefined; `world.emojiStore` exposes the backing Map).
 - Run the suite: `node tests/run.mjs` (discovers `tests/fe/*.test.mjs`;
   non-zero exit on failure).
 - Convention: each fix/feature adds `tests/fe/<issue>-<slug>.test.mjs`.

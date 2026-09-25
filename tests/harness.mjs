@@ -379,6 +379,54 @@ function makeLocalStorage() {
   };
 }
 
+// Minimal fake IndexedDB covering exactly the surface src/main.js's emoji
+// image cache touches: open(name, version) whose request gets onupgradeneeded
+// (target.result = db; db.createObjectStore makes the Map-backed store) and
+// onsuccess, plus transaction().objectStore() getAll/put/delete requests —
+// every request resolves asynchronously on the same setTimeout(0) timers
+// flush() drains. One Map backs the single "emoji" store, holding { id, data }
+// records keyed by emoji id; the seed pre-populates it from { id: dataUrl }.
+function makeIndexedDB(seed = {}) {
+  const store = new Map(Object.entries(seed).map(([id, data]) => [id, { id, data }]));
+
+  const makeRequest = (produce) => {
+    const req = { result: undefined, error: null, onsuccess: null, onerror: null };
+    setTimeout(() => {
+      try {
+        req.result = produce();
+        if (req.onsuccess) req.onsuccess({ target: req });
+      } catch (e) {
+        req.error = e;
+        if (req.onerror) req.onerror({ target: req });
+      }
+    }, 0);
+    return req;
+  };
+
+  const db = {
+    createObjectStore: () => ({}), // the Map already exists — nothing to build
+    transaction: () => ({
+      objectStore: () => ({
+        getAll: () => makeRequest(() => [...store.values()]),
+        put: (value, key) => makeRequest(() => { store.set(key, value); return key; }),
+        delete: (key) => makeRequest(() => { store.delete(key); return undefined; }),
+      }),
+    }),
+  };
+
+  return {
+    open() {
+      const req = { result: db, error: null, onsuccess: null, onerror: null, onupgradeneeded: null };
+      setTimeout(() => {
+        if (req.onupgradeneeded) req.onupgradeneeded({ target: req });
+        if (req.onsuccess) req.onsuccess({ target: req });
+      }, 0);
+      return req;
+    },
+    store, // exposed on the world as emojiStore
+  };
+}
+
 function makeWindow(tauri) {
   const win = new FakeNode(9); // a non-element: never matches selectors when events bubble past document
   win.window = win;
@@ -443,14 +491,18 @@ class FakeFileReader {
 // replaces them wholesale, so runs can't leak state into each other
 // ("Windows" in the UA keeps the Linux tray path dormant; CSS.escape is only
 // ever fed server ids, which are \w-safe already). The world OWNS its
-// localStorage (created once in boot and passed here) — re-pointing globals
-// mid-test must not wipe it, a browser's store survives arbitrary events.
-function installGlobals(win, doc, storage) {
+// localStorage and IndexedDB (both created once in boot and passed here) —
+// re-pointing globals mid-test must not wipe them, a browser's storage
+// survives arbitrary events. `idb` may be undefined (the noIdb boot option):
+// the bare `indexedDB` identifier then resolves to undefined, which the app's
+// feature-detection treats as "no IndexedDB this session".
+function installGlobals(win, doc, storage, idb) {
   const globals = {
     window: win,
     document: doc,
     navigator: { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) rustermost-harness" },
     localStorage: storage || makeLocalStorage(),
+    indexedDB: idb,
     CSS: { escape: (s) => String(s).replace(/([^\w-])/g, "\\$1") },
     FontFace: FakeFontFace,
     FileReader: FakeFileReader,
@@ -471,7 +523,7 @@ export async function flush(rounds = 10) {
   for (let i = 0; i < rounds; i++) await new Promise((r) => setTimeout(r, 0));
 }
 
-export async function boot({ handlers = {}, channels = [], posts = {}, users = {}, me = DEFAULT_ME, seeds = {} } = {}) {
+export async function boot({ handlers = {}, channels = [], posts = {}, users = {}, me = DEFAULT_ME, seeds = {}, customEmoji = [], emojiCache = {}, noIdb = false } = {}) {
   // Handlers for a realistic, quiet boot; per-test overrides win.
   const allHandlers = {
     restore_session: async () => "https://mm.example.org",
@@ -483,7 +535,8 @@ export async function boot({ handlers = {}, channels = [], posts = {}, users = {
     get_posts: async ({ channelId } = {}) => posts[channelId] || [],
     get_cached_posts: async () => { throw new Error("no snapshot"); },
     connect_websocket: async () => undefined,
-    get_custom_emojis: async () => [],
+    get_custom_emojis: async ({ page } = {}) => (page === 0 ? customEmoji : []), // paged like the real API
+    get_emoji_image: async ({ emojiId } = {}) => "data:image/png;base64,AAE-" + emojiId,
     view_channel: async () => undefined,
     ...handlers,
   };
@@ -495,8 +548,9 @@ export async function boot({ handlers = {}, channels = [], posts = {}, users = {
   const tauri = makeTauri(allHandlers, invokeLog, wsListeners);
   const win = makeWindow(tauri);
   const storage = makeLocalStorage(); // one store per world; survives reown()
+  const idb = makeIndexedDB(emojiCache); // per boot too; installed unless noIdb
   doc.parentNode = win; // events bubble el → … → body → document → window
-  installGlobals(win, doc, storage);
+  installGlobals(win, doc, storage, noIdb ? undefined : idb);
   // Pre-populate localStorage (saved settings/panes) so tests can cover the
   // "restart with persisted state" path; module scope reads it during import.
   for (const [k, v] of Object.entries(seeds)) globalThis.localStorage.setItem(k, v);
@@ -507,7 +561,7 @@ export async function boot({ handlers = {}, channels = [], posts = {}, users = {
   // main.js reads globals dynamically, so a later boot() in the same process
   // would otherwise hijack this world's document/localStorage. Re-pointing
   // them at interaction time keeps older worlds drivable.
-  const reown = () => installGlobals(win, doc, storage);
+  const reown = () => installGlobals(win, doc, storage, noIdb ? undefined : idb);
 
   const world = {
     document: doc,
@@ -517,6 +571,7 @@ export async function boot({ handlers = {}, channels = [], posts = {}, users = {
     qa: (sel, root) => findAll(root || doc, sel),
     invokeLog, // every command the app issued: [{ cmd, args }, …]
     invoked: (cmd) => invokeLog.filter((c) => c.cmd === cmd),
+    emojiStore: idb.store, // the fake IndexedDB "emoji" table: Map id -> { id, data }
     fire: (target, type, props = {}) => {
       reown();
       return dispatch(typeof target === "string" ? doc.getElementById(target) : target, type, props);

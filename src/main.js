@@ -573,7 +573,10 @@ async function init() {
   // Dormant until the WS loop forwards emoji_added: new custom emoji register live.
   await listen("mm-emoji-added", (ev) => {
     const e = ev.payload;
-    if (e && e.name && e.id) state.customEmojis[e.name] = e.id;
+    if (e && e.name && e.id) {
+      state.customEmojis[e.name] = e.id;
+      ensureEmojiImage(e.id); // warm now so the first render is instant (and persists)
+    }
   });
   // Dormant until the WS loop forwards reaction_added / reaction_removed.
   await listen("mm-reaction-added", (ev) => {
@@ -598,7 +601,10 @@ async function init() {
     console.error("fetch_teams failed", e);
   }
 
-  loadCustomEmojis(); // in parallel with channels; probes and degrades
+  // In parallel with channels; probes and degrades. Once the name -> id list
+  // lands, warmEmojiImages folds the IndexedDB cache in and background-
+  // prefetches the missing images — session warm-up, never awaited here.
+  loadCustomEmojis().then(warmEmojiImages).catch(() => {});
 
   // channels + read-state (slow: hits every team twice)
   try {
@@ -1751,6 +1757,101 @@ async function ensureAvatar(uid) {
   }
 }
 
+// ---------- emoji image cache (IndexedDB) ----------
+// Custom emoji images are immutable per id (a re-upload gets a NEW id; a
+// deleted emoji's id simply leaves the server list), so this is a plain
+// id -> data URL map with no versioning or etags: entries that no longer
+// match the server list are pruned at startup. The backend already
+// disk-caches images, but a hit still costs an invoke round-trip per image
+// per launch; this webview copy makes first paint network-free.
+// Degrades permanently for the session when IndexedDB is missing or open
+// fails: one warning, then every helper is a resilient no-op and images live
+// in memory only, exactly as before this cache existed.
+const EMOJI_DB_NAME = "rustermost";
+const EMOJI_DB_VERSION = 1;
+const EMOJI_STORE = "emoji";
+let emojiCacheDb = null;    // memoized openEmojiCache() promise
+let emojiCacheDead = false; // open failed: no-op for the rest of the session
+let emojiCacheWarned = false;
+
+function warnEmojiCache(e) {
+  if (emojiCacheWarned) return;
+  emojiCacheWarned = true;
+  console.warn("IndexedDB emoji cache unavailable; emoji images stay memory-only this session.", e);
+}
+
+// Every IDB request is awaited as a promise from its onsuccess/onerror.
+function idbRequest(req) {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error("IndexedDB request failed"));
+  });
+}
+
+// Memoized open; resolves the db, or null when IndexedDB can't serve us.
+function openEmojiCache() {
+  if (emojiCacheDead) return Promise.resolve(null);
+  if (!emojiCacheDb) {
+    emojiCacheDb = new Promise((resolve) => {
+      let req;
+      try {
+        if (typeof indexedDB === "undefined") throw new Error("indexedDB is undefined");
+        req = indexedDB.open(EMOJI_DB_NAME, EMOJI_DB_VERSION);
+      } catch (e) {
+        emojiCacheDead = true;
+        warnEmojiCache(e);
+        return resolve(null);
+      }
+      req.onupgradeneeded = () => {
+        req.result.createObjectStore(EMOJI_STORE); // out-of-line key = emoji id
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => {
+        emojiCacheDead = true;
+        warnEmojiCache(req.error);
+        resolve(null);
+      };
+    });
+  }
+  return emojiCacheDb;
+}
+
+// All cached entries as [{ id, data }]; [] on any failure.
+async function emojiCacheLoadAll() {
+  const db = await openEmojiCache();
+  if (!db) return [];
+  try {
+    const rows = await idbRequest(db.transaction(EMOJI_STORE, "readonly").objectStore(EMOJI_STORE).getAll());
+    return (rows || []).filter((r) => r && r.id && r.data);
+  } catch (e) {
+    warnEmojiCache(e);
+    return [];
+  }
+}
+
+// Fire-and-forget persist of one freshly fetched image.
+function emojiCachePut(id, data) {
+  openEmojiCache()
+    .then((db) => db && idbRequest(db.transaction(EMOJI_STORE, "readwrite").objectStore(EMOJI_STORE).put({ id, data }, id)))
+    .catch(warnEmojiCache);
+}
+
+// Best-effort: drop every cached entry whose id the server no longer lists.
+async function emojiCachePrune(validIds) {
+  const db = await openEmojiCache();
+  if (!db) return;
+  try {
+    const rows = await idbRequest(db.transaction(EMOJI_STORE, "readonly").objectStore(EMOJI_STORE).getAll());
+    for (const r of rows || []) {
+      if (r && r.id && !validIds.has(r.id)) {
+        await idbRequest(db.transaction(EMOJI_STORE, "readwrite").objectStore(EMOJI_STORE).delete(r.id));
+      }
+    }
+  } catch (e) {
+    warnEmojiCache(e);
+  }
+}
+
 // ---------- emoji ----------
 // Unicode shortcodes come from the vendored EMOJI table; custom server emoji
 // resolve name -> id via get_custom_emojis and render as small inline images.
@@ -1776,6 +1877,7 @@ async function ensureEmojiImage(id) {
     const dataUrl = await invoke("get_emoji_image", { emojiId: id });
     if (dataUrl) {
       state.emojiImages[id] = dataUrl;
+      emojiCachePut(id, dataUrl); // persist for the next launch (no-op without IndexedDB)
       for (const el of document.querySelectorAll(`img[data-emoji-id="${CSS.escape(id)}"]`)) el.src = dataUrl;
     }
   } catch (e) {
@@ -1783,6 +1885,34 @@ async function ensureEmojiImage(id) {
   } finally {
     emojiImagePending.delete(id);
   }
+}
+
+const EMOJI_PREFETCH_CONCURRENCY = 8;
+
+// Startup warm-up, run right after the custom emoji list lands: fold the
+// persisted images into memory (never overwriting fresher session entries),
+// prune ids the server no longer lists, then background-fetch whatever is
+// still missing so pickers and messages render instantly all session.
+// Deliberately NOT awaited by init's chain — this is warm-up, not gating.
+async function warmEmojiImages() {
+  const validIds = new Set(Object.values(state.customEmojis));
+  for (const { id, data } of await emojiCacheLoadAll()) {
+    if (validIds.has(id) && !state.emojiImages[id]) state.emojiImages[id] = data;
+  }
+  emojiCachePrune(validIds); // fire-and-forget
+  prefetchEmojiImages([...validIds].filter((id) => !state.emojiImages[id]));
+}
+
+// Worker pool pulling the next id off a shared cursor; ensureEmojiImage
+// dedups concurrent callers and swallows its own failures.
+function prefetchEmojiImages(ids) {
+  let next = 0;
+  const worker = async () => {
+    while (next < ids.length) await ensureEmojiImage(ids[next++]);
+  };
+  const workers = [];
+  for (let i = 0; i < Math.min(EMOJI_PREFETCH_CONCURRENCY, ids.length); i++) workers.push(worker());
+  return Promise.all(workers);
 }
 
 // DOM node for :name:, or null when the code is unknown (caller keeps the text).
