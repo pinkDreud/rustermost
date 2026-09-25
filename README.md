@@ -28,15 +28,17 @@ rustermost is a desktop client for [Mattermost](https://mattermost.com/), aimed 
 - **Message history** with infinite scroll — older messages load as you scroll back up.
 - **Start new conversations** from inside the app: a direct message or group message by picking people, or a named public/private channel in a team.
 - **Community grouped by team** — Community splits into a collapsible sub-section per originating team, and every channel keeps its team label, so same-named channels across teams are easy to tell apart.
+- **Sidebar spaces** — group conversations into your own named sections: right-click the sidebar background to create one, then drag conversations in (or use a conversation's right-click menu), and drag onto a default section header to move one back out. They fold like any section and are remembered between launches.
 - **Silence a conversation** — right-click it in the sidebar, or hit the 🔔 in the conversation header: no desktop notification, no unread badge, and it stays out of the pinned Unread section. Silencing is local to this client for now (it does not yet sync to the phone or the official app).
 - **Unread tracking synced with the server** — badges are seeded from Mattermost's read-state at startup, a pinned **Unread** section sits on top of the sidebar, and opening a conversation reports the read back so your other devices clear their badges too.
 - **File & image attachments, both directions** — send via the 📎 button, drag & drop, or pasting a screenshot; received images render as thumbnails with a click-to-zoom lightbox, other files as named chips.
 - **Markdown rendering** — links (opened in the system browser), bold/italic/strikethrough, inline code and fenced code blocks, quotes, and lists — built as DOM nodes, never injected HTML.
-- **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), a 🙂 browse-and-search picker next to the 📎, and the server's custom emoji rendered inline.
+- **Emoji** — `:shortcodes:`, an autocomplete popup in the composer (type `:ta…`), a 🙂 browse-and-search picker next to the 📎, and the server's custom emoji rendered inline (cached locally after the first fetch). Emoji render in a flat bundled Twemoji set by default — switchable in ⚙ Settings to the system emoji or a font file of your own.
 - **GIF search** — a GIF button in the composer searches Giphy and queues the pick as a normal attachment, so it uploads to Mattermost as a real file. Bring your own free API key (pasted into ⚙ Settings); without one the picker just says so. Searching talks to Giphy directly from the app, so they see your IP.
 - **Reactions** — react to any message from a searchable emoji picker; counts update live across clients and devices.
 - **Slash commands** — `/away`, `/shrug`, custom integrations — executed for real, with ephemeral replies rendered in-chat as "only visible to you" bubbles.
-- **Display settings** — a ⚙ panel for font size (small/medium/large), theme (dark/light/system, following the OS live), message density (comfortable/compact), and your Giphy API key; applied instantly and remembered between launches.
+- **Display settings** — a ⚙ panel for font size (small/medium/large), theme (dark/light/system, following the OS live), message density (comfortable/compact), the emoji set, and your Giphy API key; applied instantly and remembered between launches.
+- **Resizable layout** — drag the sidebar's right edge or the composer's top edge to size them; the sizes are remembered, and a double-click on the sash resets it.
 
 ## Installation
 
