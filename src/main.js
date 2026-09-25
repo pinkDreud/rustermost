@@ -247,6 +247,85 @@ function setMuted(channelId, muted) {
   try { localStorage.setItem(MUTED_KEY, JSON.stringify([...mutedIds])); } catch (_) {}
 }
 
+// ================= SPACES =================
+// Sidebar "spaces": user-named custom sections that conversations can be
+// parked into (Firefox tab-group style). A spaced conversation LEAVES its
+// default section (Direct messages / Groups / Community) and renders under
+// the space instead — the pinned Unread section is unaffected, so an unread
+// spaced conversation shows in both places (by design). Persisted as an
+// ordered array: array order == sidebar order (no manual reordering yet).
+// Local to this client, like the muted list — reads/writes all funnel through
+// these helpers so a future server-side sync touches nothing else in the file.
+const SPACES_KEY = "rustermost.spaces";
+function loadSpaces() {
+  try {
+    const list = JSON.parse(localStorage.getItem(SPACES_KEY));
+    if (!Array.isArray(list)) return [];
+    // Defensive validation: a hand-edited or stale entry degrades to [].
+    const clean = [];
+    for (const s of list) {
+      if (!s || typeof s !== "object") continue;
+      if (typeof s.id !== "string" || !s.id) continue;
+      if (typeof s.name !== "string" || !s.name.trim()) continue;
+      if (!Array.isArray(s.channelIds) || !s.channelIds.every((id) => typeof id === "string")) continue;
+      clean.push({ id: s.id, name: s.name, channelIds: s.channelIds });
+    }
+    return clean;
+  } catch (_) {
+    return [];
+  }
+}
+const spaces = loadSpaces();
+function saveSpaces() {
+  try { localStorage.setItem(SPACES_KEY, JSON.stringify(spaces)); } catch (_) {}
+}
+// The space a conversation currently lives in, or null.
+function spaceOf(channelId) {
+  return spaces.find((s) => s.channelIds.includes(channelId)) || null;
+}
+function createSpace(name) {
+  const trimmed = (name || "").trim();
+  if (!trimmed) return null;
+  const space = {
+    id: "s" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name: trimmed,
+    channelIds: [],
+  };
+  spaces.push(space);
+  saveSpaces();
+  return space;
+}
+// Move a conversation into a space (or back out, with null). A conversation
+// lives in at most one space, and an emptied space stays until it's deleted.
+function assignToSpace(channelId, spaceIdOrNull) {
+  for (const s of spaces) s.channelIds = s.channelIds.filter((id) => id !== channelId);
+  if (spaceIdOrNull) {
+    const target = spaces.find((s) => s.id === spaceIdOrNull);
+    if (target) target.channelIds.push(channelId);
+  }
+  saveSpaces();
+  renderSidebar();
+}
+function renameSpace(id, name) {
+  const trimmed = (name || "").trim();
+  if (!trimmed) return false;
+  const space = spaces.find((s) => s.id === id);
+  if (!space) return false;
+  space.name = trimmed;
+  saveSpaces();
+  renderSidebar();
+  return true;
+}
+// Chats of a deleted space fall back to their default sections automatically:
+// membership just stops matching in renderSidebar.
+function deleteSpace(id) {
+  const i = spaces.findIndex((s) => s.id === id);
+  if (i < 0) return;
+  spaces.splice(i, 1);
+  saveSpaces();
+  renderSidebar();
+}
+
 function saveSettings() {
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (_) {}
 }
@@ -732,6 +811,10 @@ function activityOf(ch) {
   return Math.max(server, live);
 }
 
+// Most-recent conversation first (stable when timestamps are equal). Shared
+// by renderSidebar and the space sections.
+function byRecency(a, b) { return activityOf(b) - activityOf(a); }
+
 function renderSidebar() {
   const q = (searchInput.value || "").toLowerCase();
   // The ✕ is shown exactly when there is text to clear. Syncing here —
@@ -741,27 +824,34 @@ function renderSidebar() {
   searchClearBtn.classList.toggle("hidden", !q);
   const match = (ch) => searchText(ch).includes(q);
 
+  // Conversations parked in a space leave their default section; the pinned
+  // Unread section is NOT affected by this (the duplicate is by design).
+  const assigned = new Set(spaces.flatMap((s) => s.channelIds));
+
   // Silenced conversations never reach the pinned Unread section — that is
   // the whole point of silencing them. They still show in their own section.
   const unread = state.channels.filter(
     (c) => ((state.unread[c.id] || 0) > 0 || c.id === state.keptUnreadId) && !isMuted(c.id) && match(c)
   );
-  const direct = state.channels.filter((c) => c.type === "D" && match(c));
-  const groups = state.channels.filter((c) => c.type === "G" && match(c));
-  const community = state.channels.filter((c) => (c.type === "O" || c.type === "P") && match(c));
+  const direct = state.channels.filter((c) => c.type === "D" && !assigned.has(c.id) && match(c));
+  const groups = state.channels.filter((c) => c.type === "G" && !assigned.has(c.id) && match(c));
+  const community = state.channels.filter((c) => (c.type === "O" || c.type === "P") && !assigned.has(c.id) && match(c));
 
-  // Most-recent conversation first (stable when timestamps are equal).
-  const byRecency = (a, b) => activityOf(b) - activityOf(a);
   unread.sort(byRecency);
   direct.sort(byRecency);
   groups.sort(byRecency);
   community.sort(byRecency);
 
   const searching = q.length > 0;
+  // One id→channel lookup table per render: the space sections map their
+  // stored channelIds through it.
+  const byId = new Map(state.channels.map((c) => [c.id, c]));
   channelList.innerHTML = "";
   // Pinned on top, only while something is actually unread; conversations
   // stay in their own section below as well.
   if (unread.length) channelList.appendChild(sectionEl("Unread", "Unread", unread, searching));
+  // Spaces sit between pinned Unread and the default sections, in saved order.
+  for (const s of spaces) channelList.appendChild(spaceEl(s, match, searching, byId));
   channelList.appendChild(sectionEl("Direct messages", "Direct messages", direct, searching));
   channelList.appendChild(sectionEl("Groups", "Groups", groups, searching));
   channelList.appendChild(communityEl(community, searching));
@@ -802,6 +892,43 @@ function sectionEl(key, label, items, forceOpen, sub) {
   const wrap = document.createElement("div");
   wrap.className = sub ? "section sub" : "section";
   wrap.appendChild(sectionHeaderEl(key, label, items.length, open));
+
+  if (!open) return wrap;
+
+  if (items.length === 0) {
+    const e = document.createElement("div");
+    e.className = "list-empty";
+    e.textContent = "Nothing here.";
+    wrap.appendChild(e);
+  }
+  for (const ch of items) wrap.appendChild(channelItemEl(ch));
+  return wrap;
+}
+
+// A user-named space section. Visually it's a plain .section with the shared
+// header (fold state lives in state.expanded under "space:<id>", which can
+// never collide with a section title or a "team:<id>" key), plus a
+// right-click manage menu. Unlike the default sections a space NEVER
+// disappears for being empty — only deletion removes it — so it always shows
+// the standard "Nothing here." row. Membership comes from the space's stored
+// channelIds mapped through this render's id→channel table (stale ids, e.g.
+// for channels the server no longer lists, drop out silently).
+function spaceEl(space, match, forceOpen, byId) {
+  const key = "space:" + space.id;
+  const open = forceOpen || isOpen(key);
+  const items = space.channelIds
+    .map((id) => byId.get(id))
+    .filter((ch) => ch && match(ch))
+    .sort(byRecency);
+
+  const wrap = document.createElement("div");
+  wrap.className = "section";
+  const header = sectionHeaderEl(key, space.name, items.length, open);
+  header.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    openSpaceMenu(space, e.clientX, e.clientY);
+  });
+  wrap.appendChild(header);
 
   if (!open) return wrap;
 
@@ -908,7 +1035,7 @@ function channelItemEl(ch) {
   return row;
 }
 
-// Right-click menu on a sidebar row. One entry today (silence/unsilence),
+// Right-click menu on a sidebar row (silence/unsilence, move-to-space),
 // positioned at the cursor and clamped to the window.
 const channelMenu = document.createElement("div");
 channelMenu.className = "context-menu hidden";
@@ -927,6 +1054,16 @@ function openChannelMenu(ch, x, y) {
   });
   channelMenu.appendChild(row);
 
+  const spaceRow = document.createElement("div");
+  spaceRow.className = "context-menu-row";
+  spaceRow.textContent = "🗂  Move to space…";
+  spaceRow.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    openSpacePicker(ch);
+    closeChannelMenu();
+  });
+  channelMenu.appendChild(spaceRow);
+
   channelMenu.classList.remove("hidden");
   const r = channelMenu.getBoundingClientRect(); // measurable now that it is shown
   channelMenu.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
@@ -936,6 +1073,168 @@ function openChannelMenu(ch, x, y) {
 function closeChannelMenu() {
   channelMenu.classList.add("hidden");
 }
+
+// ---- the space modal ----
+// One shell, two modes, built once like channelMenu above. PICK (from a
+// conversation's right-click menu) lists the spaces it can move into — with a
+// ✓ on its current one — plus the "No space" way out, and can create a space
+// on the spot; MANAGE (right-click on a space header) renames or deletes that
+// space. Each mode is its own .modal-body block inside the one shared .modal
+// chrome; the hidden class swaps them. DOM nodes only — never innerHTML.
+const spaceOverlay = document.createElement("div");
+spaceOverlay.className = "modal-overlay hidden";
+let spaceModalTarget = null; // { ch } in PICK mode, { space } in MANAGE mode
+
+const spaceModal = document.createElement("div");
+spaceModal.className = "modal";
+const spaceHeader = document.createElement("div");
+spaceHeader.className = "modal-header";
+const spaceTitle = document.createElement("div");
+spaceTitle.className = "modal-title";
+const spaceCloseBtn = document.createElement("button");
+spaceCloseBtn.className = "modal-close";
+spaceCloseBtn.type = "button";
+spaceCloseBtn.title = "Close";
+spaceCloseBtn.textContent = "✕";
+spaceHeader.appendChild(spaceTitle);
+spaceHeader.appendChild(spaceCloseBtn);
+
+// PICK mode block.
+const spacePickWrap = document.createElement("div");
+spacePickWrap.className = "modal-body";
+const spacePickList = document.createElement("div");
+spacePickList.className = "space-list";
+const spaceNameInput = document.createElement("input");
+spaceNameInput.className = "modal-input";
+spaceNameInput.placeholder = "New space name…";
+const spaceCreateBtn = document.createElement("button");
+spaceCreateBtn.className = "modal-primary";
+spaceCreateBtn.type = "button";
+spaceCreateBtn.textContent = "Create and move here";
+spacePickWrap.appendChild(spacePickList);
+spacePickWrap.appendChild(spaceNameInput);
+spacePickWrap.appendChild(spaceCreateBtn);
+
+// MANAGE mode block.
+const spaceManageWrap = document.createElement("div");
+spaceManageWrap.className = "modal-body hidden";
+const spaceRenameInput = document.createElement("input");
+spaceRenameInput.className = "modal-input";
+const spaceRenameBtn = document.createElement("button");
+spaceRenameBtn.className = "modal-primary";
+spaceRenameBtn.type = "button";
+spaceRenameBtn.textContent = "Rename";
+const spaceDeleteBtn = document.createElement("button");
+spaceDeleteBtn.className = "modal-danger";
+spaceDeleteBtn.type = "button";
+spaceDeleteBtn.textContent = "Delete space";
+spaceManageWrap.appendChild(spaceRenameInput);
+spaceManageWrap.appendChild(spaceRenameBtn);
+spaceManageWrap.appendChild(spaceDeleteBtn);
+
+spaceModal.appendChild(spaceHeader);
+spaceModal.appendChild(spacePickWrap);
+spaceModal.appendChild(spaceManageWrap);
+spaceOverlay.appendChild(spaceModal);
+document.body.appendChild(spaceOverlay);
+
+function openSpacePicker(ch) {
+  spaceModalTarget = { ch };
+  spaceTitle.textContent = `Move “${displayName(ch)}”`;
+  spacePickWrap.classList.remove("hidden");
+  spaceManageWrap.classList.add("hidden");
+
+  // One row per existing space — ✓ marks the one the conversation is in —
+  // then the permanent way back to the default section.
+  spacePickList.innerHTML = "";
+  for (const s of spaces) {
+    const row = document.createElement("div");
+    row.className = "person-row"; // reuse the people-picker row for hover
+    const nm = document.createElement("div");
+    nm.className = "person-name";
+    nm.textContent = s.name;
+    row.appendChild(nm);
+    if (spaceOf(ch.id) === s) {
+      const check = document.createElement("span");
+      check.className = "space-row-check";
+      check.textContent = "✓";
+      row.appendChild(check);
+    }
+    row.addEventListener("click", () => {
+      assignToSpace(ch.id, s.id);
+      closeSpaceModal();
+    });
+    spacePickList.appendChild(row);
+  }
+  const noneRow = document.createElement("div");
+  noneRow.className = "person-row";
+  const noneName = document.createElement("div");
+  noneName.className = "person-name";
+  noneName.textContent = "No space — back to its default section";
+  noneRow.appendChild(noneName);
+  noneRow.addEventListener("click", () => {
+    assignToSpace(ch.id, null);
+    closeSpaceModal();
+  });
+  spacePickList.appendChild(noneRow);
+
+  spaceNameInput.value = "";
+  spaceOverlay.classList.remove("hidden");
+  spaceNameInput.focus();
+}
+
+function openSpaceMenu(space) {
+  spaceModalTarget = { space };
+  spaceTitle.textContent = `Space: ${space.name}`;
+  spacePickWrap.classList.add("hidden");
+  spaceManageWrap.classList.remove("hidden");
+  spaceRenameInput.value = space.name;
+  spaceOverlay.classList.remove("hidden");
+  spaceRenameInput.focus();
+}
+
+function closeSpaceModal() {
+  spaceOverlay.classList.add("hidden");
+  spaceModalTarget = null;
+}
+
+// "Create and move here" (button click or Enter in the field). A rejected
+// (blank) name changes nothing and leaves the modal open.
+function createSpaceFromPicker() {
+  const target = spaceModalTarget;
+  if (!target || !target.ch) return;
+  const created = createSpace(spaceNameInput.value);
+  if (!created) return;
+  assignToSpace(target.ch.id, created.id);
+  closeSpaceModal();
+}
+spaceCreateBtn.addEventListener("click", createSpaceFromPicker);
+spaceNameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); createSpaceFromPicker(); }
+});
+
+// Same deal for "Rename": a blank name is rejected, the modal stays open.
+function renameSpaceFromManage() {
+  const target = spaceModalTarget;
+  if (!target || !target.space) return;
+  if (renameSpace(target.space.id, spaceRenameInput.value)) closeSpaceModal();
+}
+spaceRenameBtn.addEventListener("click", renameSpaceFromManage);
+spaceRenameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); renameSpaceFromManage(); }
+});
+spaceDeleteBtn.addEventListener("click", () => {
+  const target = spaceModalTarget;
+  if (!target || !target.space) return;
+  deleteSpace(target.space.id);
+  closeSpaceModal();
+});
+
+spaceCloseBtn.addEventListener("click", closeSpaceModal);
+// Backdrop click dismisses — the pattern settingsOverlay uses.
+spaceOverlay.addEventListener("click", (e) => {
+  if (e.target === spaceOverlay) closeSpaceModal();
+});
 
 // Flip the silence flag and refresh whatever is showing it.
 function toggleMuted(channelId) {
@@ -3418,6 +3717,7 @@ document.addEventListener("keydown", (e) => {
   if (!channelMenu.classList.contains("hidden")) closeChannelMenu();
   else if (!emojiPicker.classList.contains("hidden")) closeEmojiPicker(true);
   else if (!gifPicker.classList.contains("hidden")) closeGifPicker(true);
+  else if (!spaceOverlay.classList.contains("hidden")) closeSpaceModal();
   else if (!settingsOverlay.classList.contains("hidden")) closeSettings();
   else if (!modalOverlay.classList.contains("hidden")) closeModal();
 });

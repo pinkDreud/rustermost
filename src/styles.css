@@ -653,6 +653,19 @@ select.modal-input { appearance: none; cursor: pointer; }
 }
 .modal-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .modal-primary:disabled { opacity: 0.5; cursor: default; }
+/* Same shape as .modal-primary, in danger red — the space manager's
+   "Delete space" button. */
+.modal-danger {
+  background: var(--danger); color: #fff;
+  border-radius: 10px; padding: 11px; font-size: 1.07rem; font-weight: 600;
+  transition: filter 0.15s;
+}
+.modal-danger:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* The space picker list: rows reuse .person-row for hover; the ✓ marking the
+   conversation's current space docks to the row's right edge. */
+.space-list { display: flex; flex-direction: column; gap: 2px; }
+.space-row-check { margin-left: auto; }
 
 /* ---------- settings modal (settings-only bits) ---------- */
 .setting-row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
