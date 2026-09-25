@@ -1,6 +1,6 @@
 [package]
 name = "rustermost"
-version = "0.0.5"
+version = "0.0.6"
 description = "A mattermost client with tauri"
 authors = ["Matteo Magherini", "Claude Opus (Claude Code)", "Kimi (OpenCode)"]
 edition = "2021"
