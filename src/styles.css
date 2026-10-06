@@ -708,8 +708,8 @@ select.modal-input { appearance: none; cursor: pointer; }
   line-height: 0;
 }
 .attachment.image img {
-  max-width: 260px;
-  max-height: 260px;
+  max-width: var(--thumb-size, 260px);
+  max-height: var(--thumb-size, 260px);
   display: block;
   border-radius: 8px;
 }

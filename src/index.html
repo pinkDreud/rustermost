@@ -12,10 +12,12 @@
       // constants in main.js — and the sidebar clamp with SIDEBAR_MIN/MAX.
       (function () {
         var FONT = { small: "13px", medium: "14px", large: "16px" };
+        var THUMB = { small: "180px", medium: "260px", large: "360px" };
         var s = {};
         try { s = JSON.parse(localStorage.getItem("rustermost.settings")) || {}; } catch (e) {}
         var root = document.documentElement;
         if (FONT[s.fontSize]) root.style.setProperty("--app-font-size", FONT[s.fontSize]);
+        if (THUMB[s.thumbSize]) root.style.setProperty("--thumb-size", THUMB[s.thumbSize]);
         var light = s.theme === "light" ||
           (s.theme === "system" && window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches);
         root.dataset.theme = light ? "light" : "dark";
@@ -174,6 +176,14 @@
             <div class="seg option-seg" data-setting="density" role="group" aria-label="Message density">
               <button class="seg-btn" type="button" data-value="comfortable">Comfortable</button>
               <button class="seg-btn" type="button" data-value="compact">Compact</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div class="modal-label">Thumbnail size</div>
+            <div class="seg option-seg" data-setting="thumbSize" role="group" aria-label="Thumbnail size">
+              <button class="seg-btn" type="button" data-value="small">Small</button>
+              <button class="seg-btn" type="button" data-value="medium">Medium</button>
+              <button class="seg-btn" type="button" data-value="large">Large</button>
             </div>
           </div>
           <div class="setting-row">

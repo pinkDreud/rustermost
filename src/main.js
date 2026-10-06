@@ -195,16 +195,20 @@ function loadUrl() { try { return localStorage.getItem(URL_KEY) || ""; } catch (
 // script in index.html (this module is deferred, too late to prevent a flash);
 // this copy owns everything after that: live changes and OS theme tracking.
 const SETTINGS_KEY = "rustermost.settings";
-const SETTINGS_DEFAULTS = { fontSize: "medium", theme: "dark", density: "comfortable", emojiSet: "twemoji", giphyKey: "" };
+const SETTINGS_DEFAULTS = { fontSize: "medium", theme: "dark", density: "comfortable", emojiSet: "twemoji", thumbSize: "medium", giphyKey: "" };
 const SETTINGS_VALUES = {
   fontSize: ["small", "medium", "large"],
   theme: ["dark", "light", "system"],
   density: ["comfortable", "compact"],
   emojiSet: ["twemoji", "system", "custom"],
+  thumbSize: ["small", "medium", "large"],
 };
 // Must stay in sync with the inline script in index.html; "medium" must also
 // match the fallback in styles.css (html { font-size: var(--app-font-size, 14px) }).
 const FONT_SIZES = { small: "13px", medium: "14px", large: "16px" };
+// Same sync rules as FONT_SIZES; "medium" must also match the styles.css
+// fallback (.attachment.image img { max-width: var(--thumb-size, 260px) }).
+const THUMB_SIZES = { small: "180px", medium: "260px", large: "360px" };
 
 // Saved settings merged over the defaults; unknown values fall back to default
 // (protects against a hand-edited or stale localStorage entry).
@@ -338,6 +342,7 @@ const lightQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme:
 function applySettings() {
   const root = document.documentElement;
   root.style.setProperty("--app-font-size", FONT_SIZES[settings.fontSize]);
+  root.style.setProperty("--thumb-size", THUMB_SIZES[settings.thumbSize]);
   const theme = settings.theme === "system" ? (lightQuery && lightQuery.matches ? "light" : "dark") : settings.theme;
   root.dataset.theme = theme;
   root.dataset.density = settings.density;

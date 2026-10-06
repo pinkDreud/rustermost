@@ -358,6 +358,7 @@ function buildSkeleton(doc) {
     h("button", { id: "settings-close", type: "button" }),
     seg("fontSize", ["small", "medium", "large"]), seg("theme", ["dark", "light", "system"]),
     seg("density", ["comfortable", "compact"]),
+    seg("thumbSize", ["small", "medium", "large"]),
     seg("emojiSet", ["twemoji", "system", "custom"]),
     h("div", { id: "emoji-custom-row", class: "setting-row hidden" },
       h("input", { id: "emoji-font-file", type: "file", class: "hidden" }),
