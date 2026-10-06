@@ -1506,6 +1506,11 @@ async function openChannel(id) {
   chatTitle.textContent = displayName(ch);
   chatSub.textContent = subLabel(ch);
   renderMuteBtn();
+  // #33: autoResize() last ran at boot (applyPanes) while the chat panel was
+  // still hidden — a display:none textarea measures scrollHeight 0, so the
+  // composer stayed a stub until the first keystroke. Re-measure now that the
+  // panel is visible and a real layout exists.
+  autoResize();
   // Opening a conversation hands focus straight to the composer (#17): search →
   // click → type, with no extra click into the textbox. Done right away — the
   // async loads below never touch focus, so nothing steals it back.
