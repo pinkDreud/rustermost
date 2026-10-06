@@ -154,7 +154,7 @@ test("bundled Twemoji webfont exists and is the picker-catalog+chrome subset", (
   ok(bytes.length > 20 * 1024 && bytes.length < 300 * 1024, `subset size in (20KB, 300KB), got ${bytes.length}`);
 });
 
-test("stacks keep 'Rustermost Emoji' before the generics; the face is registered at runtime", () => {
+test("stacks place 'Rustermost Emoji' after the platform fonts; the face is registered at runtime", () => {
   const css = readFileSync(path.join(root, "src", "styles.css"), "utf8");
   const main = readFileSync(path.join(root, "src", "main.js"), "utf8");
   ok(!css.includes("@font-face"), "styles.css declares NO static @font-face (runtime registration only)");
@@ -162,9 +162,11 @@ test("stacks keep 'Rustermost Emoji' before the generics; the face is registered
     css.includes('"Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, "Rustermost Emoji", sans-serif'),
     'html/body stack lists "Rustermost Emoji" before sans-serif',
   );
+  // #34 flipped the code stack: generic monospace precedes the emoji subset,
+  // which otherwise wins the keycap ASCII digits it carries at non-mono widths.
   ok(
-    css.includes('ui-monospace, "SF Mono", Menlo, Consolas, "Rustermost Emoji", monospace'),
-    'code stack lists "Rustermost Emoji" before monospace',
+    css.includes('ui-monospace, "SF Mono", Menlo, Consolas, monospace, "Rustermost Emoji"'),
+    'code stack lists monospace before "Rustermost Emoji" (#34)',
   );
   ok(main.includes('fonts/twemoji-mozilla.woff2'), "main.js registers the bundled Twemoji file");
 });

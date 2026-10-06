@@ -748,11 +748,16 @@ select.modal-input { appearance: none; cursor: pointer; }
    light theme), so links and quotes there use the bubble's text color. */
 .msg-me .msg-body a { color: var(--bubble-me-text); text-decoration: underline; }
 .msg-me .msg-body blockquote { color: var(--bubble-me-text); opacity: 0.85; }
+/* #34: generic monospace must precede "Rustermost Emoji" here — the emoji
+   subset keeps the keycap ASCII bases (0-9, #, *), and on Linux none of the
+   named mono fonts resolve, so per-glyph fallback would otherwise draw those
+   digits from the emoji font at non-monospace widths and break columned code
+   blocks. Real emoji (absent from mono fonts) still fall through to it. */
 .msg-body code {
   background: var(--code-bg);
   padding: 1px 5px;
   border-radius: 4px;
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Rustermost Emoji", monospace;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace, "Rustermost Emoji";
   font-size: 0.86rem;
 }
 .msg-body pre {
