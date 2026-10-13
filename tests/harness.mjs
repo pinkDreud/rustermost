@@ -445,8 +445,12 @@ function makeWindow(tauri) {
 // stub them so Linux-path tests could ride along later.
 function makeTauri(handlers, invokeLog, wsListeners) {
   const noOp = async () => {};
+  // Plugin JS APIs that are thin wrappers over invoke in the real bridge are
+  // routed the same way here ("plugin:<name>|<cmd>"), so tests stub/assert
+  // them like any command.
+  const pluginCall = (cmd) => (args) => tauri.core.invoke(cmd, args);
   const fakeWin = { show: noOp, hide: noOp, unminimize: noOp, setFocus: noOp, destroy: noOp, onCloseRequested: noOp };
-  return {
+  const tauri = {
     core: {
       invoke: async (cmd, args) => {
         invokeLog.push({ cmd, args });
@@ -468,7 +472,13 @@ function makeTauri(handlers, invokeLog, wsListeners) {
     menu: { Menu: { new: async (o) => o }, MenuItem: { new: async (o) => o } },
     tray: { TrayIcon: { new: async (o) => o } },
     image: { Image: { new: async (...a) => a } },
+    dialog: {
+      save: (options) => pluginCall("plugin:dialog|save")({ options }),
+      // the real plugin flattens a { title, kind } options object into the args
+      message: (message, options = {}) => pluginCall("plugin:dialog|message")({ message, ...(typeof options === "string" ? { title: options } : options) }),
+    },
   };
+  return tauri;
 }
 
 // FontFace / FileReader: the app registers the "Rustermost Emoji" family at

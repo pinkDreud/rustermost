@@ -28,6 +28,8 @@
 //     message text preserved.
 //   - edit_message — right-click editing of my own messages. Without it: the
 //     Edit item never shows / edits stay read-only.
+//   - save_file (+ the dialog plugin's save()) — right-click "Save as…" on an
+//     attachment. Without them: the item never shows (native menu stays).
 
 import { EMOJI } from "./emoji-data.js";
 
@@ -141,6 +143,7 @@ const state = {
   pageMore: false, // might there be older posts to load?
   pageLoading: false, // a page load is in flight
   editMessageEnabled: true, // flips off if edit_message isn't in the backend yet
+  saveFileEnabled: true, // flips off if save_file / the dialog plugin aren't in the backend yet
   editing: null, // { postId, original } while a message edit is in progress
 };
 
@@ -2324,6 +2327,7 @@ function attachmentsEl(fileIds) {
   for (const id of fileIds) {
     const el = document.createElement("div");
     el.className = "attachment";
+    el.dataset.fileId = id; // how the right-click menu finds what to save
     el.textContent = "📎 …";
     wrap.appendChild(el);
     hydrateAttachment(el, id);
@@ -2398,6 +2402,51 @@ async function openLightbox(id, info) {
     img.src = await invoke("get_file", { fileId: id, mime: info.mime_type });
   } catch (_) {
     close(); // full-size fetch not available — the thumbnail stays in the bubble
+  }
+}
+
+// #28: "Save as…" — the native save dialog picks the destination, then the
+// backend's save_file streams the ORIGINAL file there (never the thumbnail
+// the bubble shows). Cancelling the dialog is a silent no-op.
+function canSaveFiles() {
+  return state.saveFileEnabled && !!(window.__TAURI__.dialog && window.__TAURI__.dialog.save);
+}
+
+// Server file names are suggestions only, but Windows rejects these
+// characters outright — keep the dialog's default name valid everywhere.
+function safeFileName(name) {
+  const clean = String(name || "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
+  return clean || "attachment";
+}
+
+async function saveAttachment(id) {
+  const info = state.fileInfos[id];
+  const dialog = window.__TAURI__.dialog;
+  let destPath;
+  try {
+    destPath = await dialog.save({ defaultPath: safeFileName(info && info.name) });
+  } catch (e) {
+    state.saveFileEnabled = false; // dialog plugin / permission missing
+    console.warn("dialog.save unavailable (Save as… hidden). Is tauri-plugin-dialog registered?", e);
+    return;
+  }
+  if (!destPath) return; // user cancelled
+  try {
+    await invoke("save_file", { fileId: id, destPath });
+  } catch (e) {
+    // Tauri's exact wording only — a bare "not found" would also match the
+    // server's own 404 for a deleted file, which is a real failure to report.
+    if (/command \S+ not found|no stub handler|not a valid command/i.test(String(e))) {
+      state.saveFileEnabled = false; // backend built before save_file
+      console.warn("save_file unavailable (Save as… hidden). Is it in generate_handler!?", e);
+      return;
+    }
+    // A real failure (network, disk, permissions): tell the user.
+    try {
+      await dialog.message(`Could not save "${info ? info.name : "file"}":\n${e}`, { title: "Save failed", kind: "error" });
+    } catch (_) {
+      console.warn("save_file failed", e);
+    }
   }
 }
 
@@ -2668,12 +2717,23 @@ function bubbleEl({ mine, uid, sender, text, ts, files, postId, reactions, edite
 
   row.appendChild(el);
 
-  // Right-click on my own bubble offers editing — only while the backend has
-  // the edit_message command (one not-found flips the flag off for the session).
+  // Right-click: "Save as…" when over a loaded attachment (#28), editing on
+  // my own bubble — each only while its backend command exists (one
+  // not-found flips the flag off for the session). Nothing to offer → the
+  // native menu stays.
   row.addEventListener("contextmenu", (e) => {
-    if (!mine || !postId || !state.editMessageEnabled) return;
+    const items = [];
+    const att = e.target && e.target.closest ? e.target.closest(".attachment") : null;
+    const fileId = att && att.dataset.fileId;
+    if (fileId && state.fileInfos[fileId] && canSaveFiles()) {
+      items.push({ label: "💾  Save as…", action: () => saveAttachment(fileId) });
+    }
+    if (mine && postId && state.editMessageEnabled) {
+      items.push({ label: "✏️  Edit message", action: () => startEdit({ postId, original: text || "" }) });
+    }
+    if (!items.length) return;
     e.preventDefault();
-    openMsgMenu(e.clientX, e.clientY, postId, text || "");
+    openMsgMenu(e.clientX, e.clientY, items);
   });
   return row;
 }
@@ -3698,17 +3758,20 @@ const msgMenu = document.createElement("div");
 msgMenu.className = "context-menu hidden";
 document.body.appendChild(msgMenu);
 
-function openMsgMenu(x, y, postId, original) {
+// items: [{ label, action }], one row each.
+function openMsgMenu(x, y, items) {
   msgMenu.innerHTML = "";
-  const row = document.createElement("div");
-  row.className = "context-menu-row";
-  row.textContent = "✏️  Edit message";
-  row.addEventListener("mousedown", (e) => {
-    e.preventDefault();
-    startEdit({ postId, original });
-    closeMsgMenu();
-  });
-  msgMenu.appendChild(row);
+  for (const { label, action } of items) {
+    const row = document.createElement("div");
+    row.className = "context-menu-row";
+    row.textContent = label;
+    row.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      closeMsgMenu();
+      action();
+    });
+    msgMenu.appendChild(row);
+  }
 
   closeChannelMenu(); // one floating menu at a time
   msgMenu.classList.remove("hidden");
