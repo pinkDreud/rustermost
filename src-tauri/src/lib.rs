@@ -53,6 +53,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let cache_dir = app.path().app_cache_dir()?;
             let data_dir = app.path().app_data_dir()?;
@@ -116,7 +117,8 @@ pub fn run() {
             execute_command,
             get_cached_posts,
             restore_session,
-            edit_message
+            edit_message,
+            save_file
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

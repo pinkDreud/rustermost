@@ -1,3 +1,5 @@
+use tauri::utils::config::FrontendDist::Url;
+
 pub(crate) fn atomic_file_write(path: &std::path::Path, data: &str) {
     let tmp_path = path.with_extension("tmp");
     if std::fs::write(&tmp_path, &data).is_ok() {
@@ -48,6 +50,27 @@ pub async fn get_file(
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[tauri::command]
+pub async fn save_file(
+    file_id: String,
+    dest_path: String,
+    state: tauri::State<'_, crate::session::AppState>,
+) -> Result<(), crate::error::AppError> {
+    let session= state.current_session()?;
+    let url = format!("{}/api/v4/files/{}", session.base_url, file_id);
+
+    let resp = reqwest::Client::new()
+    .get(url)
+    .bearer_auth(session.token)
+    .send()
+    .await?
+    .error_for_status()?;
+
+    let bytes = resp.bytes().await?;
+    tokio::fs::write(&dest_path, &bytes).await?;
+    Ok(())
 }
 
 #[tauri::command]
